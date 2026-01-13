@@ -1,10 +1,10 @@
 import { useState, useRef } from 'react';
 import { 
   X, Upload, Download, FileSpreadsheet, Award, History, 
-  Trash2, Plus, Minus, RotateCcw, ChevronRight, AlertCircle
+  Trash2, Plus, Minus, RotateCcw, AlertCircle
 } from 'lucide-react';
 import { Participant, Prize, DrawRecord } from '../types';
-import { importParticipantsFromExcel, exportWinnersToExcel, downloadTemplate } from '../utils/excel';
+import { exportWinnersToExcel, downloadTemplate } from '../utils/excel';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -29,7 +29,8 @@ const SettingsPanel = ({
   prizes,
   onPrizesChange,
   records,
-  onRecordsChange,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  onRecordsChange: _onRecordsChange,
   onUndoRecord,
   onClearAll,
 }: SettingsPanelProps) => {

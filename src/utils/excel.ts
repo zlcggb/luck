@@ -66,7 +66,7 @@ export const exportWinnersToExcel = (records: DrawRecord[], filename = '年会�
   const rows: Record<string, string>[] = [];
   
   records.forEach((record) => {
-    record.winners.forEach((winner, idx) => {
+    record.winners.forEach((winner) => {
       rows.push({
         '奖项': record.prizeName,
         '抽奖时间': new Date(record.timestamp).toLocaleString('zh-CN'),

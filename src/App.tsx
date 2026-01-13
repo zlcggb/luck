@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, Square, Trophy, RefreshCw, Grid, HelpCircle, Settings, Award, Gift, ChevronRight, ChevronLeft, X } from 'lucide-react';
+import { Play, Square, Trophy, Grid, HelpCircle, Settings, Gift, ChevronRight, X } from 'lucide-react';
 import { Participant, Prize, DrawRecord, DEFAULT_PRIZES } from './types';
 import { 
   saveParticipants, loadParticipants, 
@@ -13,9 +13,7 @@ import {
   getSpecialLayoutRows, 
   getGridClass, 
   getDrawingCardStyle,
-  calculateSummaryLayout,
-  calculateLayout,
-  calculateOptimalRows
+  calculateSummaryLayout
 } from './utils/layoutAlgorithm';
 import SettingsPanel from './components/SettingsPanel';
 
@@ -328,12 +326,7 @@ const App = () => {
     setCurrentPrizeId(DEFAULT_PRIZES[0].id);
   };
 
-  // 重置当前轮（仅清除显示）
-  const resetCurrentRound = () => {
-    setCurrentDisplay([]);
-    setShowConfetti(false);
-    setHasDrawn(false);
-  };
+
 
   // 使用布局算法获取卡片样式
   const cardStyle = getDrawingCardStyle(batchSize);
@@ -805,7 +798,7 @@ const App = () => {
                             );
                           } else {
                             // 实际用户卡片
-                            const user = item.user!;
+                            const user = (item as { placeholder: false; user: Participant; idx: number }).user;
                             return (
                               <div 
                                 key={`${user.id}-${item.idx}`}
