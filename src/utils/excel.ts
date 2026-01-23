@@ -4,26 +4,89 @@ import { Participant, DrawRecord } from '../types';
 // 解析 Excel 文件用于预览
 export const parseExcelFile = (file: File): Promise<{ headers: string[], data: any[] }> => {
   return new Promise((resolve, reject) => {
+    // 验证文件类型
+    const validTypes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+      'application/vnd.ms-excel', // .xls
+      'application/x-excel',
+      'application/x-msexcel',
+    ];
+    const validExtensions = ['.xlsx', '.xls'];
+    const fileName = file.name.toLowerCase();
+    const hasValidExtension = validExtensions.some(ext => fileName.endsWith(ext));
+    
+    console.log('[Excel Import] 文件名:', file.name);
+    console.log('[Excel Import] 文件类型:', file.type);
+    console.log('[Excel Import] 文件大小:', file.size, 'bytes');
+    
+    // 放宽验证，只检查扩展名（因为 MIME 类型在某些浏览器/系统可能不正确）
+    if (!hasValidExtension && !validTypes.includes(file.type)) {
+      console.error('[Excel Import] 不支持的文件格式');
+      reject(new Error(`不支持的文件格式: ${file.type || '未知'}。请使用 .xlsx 或 .xls 格式的 Excel 文件。`));
+      return;
+    }
+
     const reader = new FileReader();
+    
     reader.onload = (e) => {
       try {
-        const data = e.target?.result;
-        const workbook = XLSX.read(data, { type: 'binary' });
+        const arrayBuffer = e.target?.result;
+        if (!arrayBuffer) {
+          throw new Error('文件内容为空');
+        }
+        
+        console.log('[Excel Import] 开始解析 Excel 文件...');
+        
+        // 使用 ArrayBuffer 类型读取（比 binary 更可靠）
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          throw new Error('Excel 文件中没有工作表');
+        }
+        
         const sheetName = workbook.SheetNames[0];
+        console.log('[Excel Import] 读取工作表:', sheetName);
+        
         const worksheet = workbook.Sheets[sheetName];
         
+        if (!worksheet) {
+          throw new Error('无法读取工作表内容');
+        }
+        
         // 获取表头
-        const headers = XLSX.utils.sheet_to_json(worksheet, { header: 1 })[0] as string[];
+        const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+        
+        if (!rawData || rawData.length === 0) {
+          throw new Error('Excel 文件内容为空');
+        }
+        
+        const headers = (rawData[0] || []).map((h: any) => String(h || '').trim()).filter(Boolean);
+        
+        if (headers.length === 0) {
+          throw new Error('无法识别表头，请确保第一行包含列标题');
+        }
+        
         // 获取数据
         const jsonData = XLSX.utils.sheet_to_json(worksheet);
         
+        console.log('[Excel Import] 解析成功! 表头:', headers);
+        console.log('[Excel Import] 数据行数:', jsonData.length);
+        
         resolve({ headers, data: jsonData });
       } catch (error) {
-        reject(new Error('解析 Excel 失败'));
+        console.error('[Excel Import] 解析失败:', error);
+        const errorMessage = error instanceof Error ? error.message : '未知错误';
+        reject(new Error(`解析 Excel 失败: ${errorMessage}`));
       }
     };
-    reader.onerror = () => reject(new Error('读取文件失败'));
-    reader.readAsBinaryString(file);
+    
+    reader.onerror = (e) => {
+      console.error('[Excel Import] 读取文件失败:', e);
+      reject(new Error('读取文件失败，请检查文件是否损坏'));
+    };
+    
+    // 使用 ArrayBuffer 方式读取（更可靠，兼容性更好）
+    reader.readAsArrayBuffer(file);
   });
 };
 

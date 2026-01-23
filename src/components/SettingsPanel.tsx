@@ -67,7 +67,9 @@ const SettingsPanel = ({
       setColumnMapping(autoMapping);
 
     } catch (error) {
-      alert('无法解析 Excel 文件');
+      const errorMessage = error instanceof Error ? error.message : '无法解析 Excel 文件';
+      alert(errorMessage);
+      console.error('[Excel Import Error]', error);
     } finally {
       setImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
