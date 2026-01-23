@@ -1,10 +1,14 @@
 import { useState, useRef } from 'react';
 import { 
   X, Upload, Download, FileSpreadsheet, Award, History, 
-  Trash2, Plus, Minus, RotateCcw, AlertCircle
+  Trash2, Plus, Minus, RotateCcw, AlertCircle, QrCode, MapPin,
+  Sparkles, ChevronRight, Monitor, Settings2
 } from 'lucide-react';
 import { Participant, Prize, DrawRecord } from '../types';
 import { exportWinnersToExcel, downloadTemplate, parseExcelFile, processImportData } from '../utils/excel';
+import { CheckInSettings, DEFAULT_CHECKIN_SETTINGS } from '../types/checkin';
+import { saveCheckInSettings, loadCheckInSettings, clearCheckInRecords, calculateStats } from '../utils/checkinStorage';
+import { useModal } from '../contexts/ModalContext';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -17,9 +21,10 @@ interface SettingsPanelProps {
   onRecordsChange: (records: DrawRecord[]) => void;
   onUndoRecord: (recordId: string) => void;
   onClearAll: () => void;
+  onOpenCheckInDisplay?: () => void; // 打开签到大屏
 }
 
-type TabType = 'import' | 'prizes' | 'history' | 'export';
+type TabType = 'import' | 'prizes' | 'history' | 'export' | 'checkin';
 
 const SettingsPanel = ({
   isOpen,
@@ -33,11 +38,19 @@ const SettingsPanel = ({
   onRecordsChange: _onRecordsChange,
   onUndoRecord,
   onClearAll,
+  onOpenCheckInDisplay,
 }: SettingsPanelProps) => {
   const [activeTab, setActiveTab] = useState<TabType>('import');
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  
+  // 签到相关状态
+  const [checkInSettings, setCheckInSettings] = useState<CheckInSettings>(DEFAULT_CHECKIN_SETTINGS);
+  const [checkInStats, setCheckInStats] = useState({ checkedInCount: 0, checkInPercentage: 0 });
+
+  // 使用内部弹窗
+  const { showSuccess, showWarning, showError, showConfirm } = useModal();
 
   // 用于导入预览的状态
   const [previewFile, setPreviewFile] = useState<{ headers: string[], data: any[] } | null>(null);
@@ -53,7 +66,7 @@ const SettingsPanel = ({
       const { headers, data } = await parseExcelFile(file);
       
       if (headers.length === 0 || data.length === 0) {
-        alert('文件内容为空或格式不正确');
+        showWarning('文件内容为空或格式不正确');
         return;
       }
 
@@ -69,7 +82,7 @@ const SettingsPanel = ({
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '无法解析 Excel 文件';
-      alert(errorMessage);
+      showError(errorMessage);
       console.error('[Excel Import Error]', error);
     } finally {
       setImporting(false);
@@ -81,18 +94,18 @@ const SettingsPanel = ({
   const confirmImport = () => {
     if (!previewFile) return;
     if (!columnMapping.name) {
-      alert('请至少选择"姓名"对应的列');
+      showWarning('请至少选择"姓名"对应的列');
       return;
     }
 
     // 直接调用处理函数
     const imported = processImportData(previewFile.data, columnMapping);
     if (imported.length === 0) {
-      alert('未能提取到有效数据，请检查映射关系');
+      showError('未能提取到有效数据，请检查映射关系');
       return;
     }
     onParticipantsChange(imported);
-    alert(`成功导入 ${imported.length} 名参与者！`);
+    showSuccess(`成功导入 ${imported.length} 名参与者！`);
     setPreviewFile(null);
   };
 
@@ -123,18 +136,44 @@ const SettingsPanel = ({
   // 删除奖项
   const deletePrize = (id: string) => {
     if (prizes.length <= 1) {
-      alert('至少保留一个奖项');
+      showWarning('至少保留一个奖项');
       return;
     }
     onPrizesChange(prizes.filter(p => p.id !== id));
+  };
+
+  // 加载签到设置和统计
+  const loadCheckInData = () => {
+    const settings = loadCheckInSettings();
+    setCheckInSettings(settings);
+    const stats = calculateStats();
+    setCheckInStats({ checkedInCount: stats.checkedInCount, checkInPercentage: stats.checkInPercentage });
+  };
+
+  // 更新签到设置
+  const updateCheckInSettings = (updates: Partial<CheckInSettings>) => {
+    const newSettings = { ...checkInSettings, ...updates };
+    setCheckInSettings(newSettings);
+    saveCheckInSettings(newSettings);
+  };
+
+  // 清除签到记录
+  const handleClearCheckInRecords = async () => {
+    const confirmed = await showConfirm('确定要清除所有签到记录吗？此操作不可恢复。');
+    if (confirmed) {
+      clearCheckInRecords();
+      loadCheckInData();
+      showSuccess('签到记录已清除');
+    }
   };
 
   // Tab 配置
   const tabs: { id: TabType; label: string; icon: React.ReactNode }[] = [
     { id: 'import', label: '导入名单', icon: <Upload size={18} /> },
     { id: 'prizes', label: '奖项设置', icon: <Award size={18} /> },
-    { id: 'history', label: '历史记录', icon: <History size={18} /> },
-    { id: 'export', label: '数据导出', icon: <Download size={18} /> },
+    { id: 'checkin', label: '签到', icon: <QrCode size={18} /> },
+    { id: 'history', label: '历史', icon: <History size={18} /> },
+    { id: 'export', label: '导出', icon: <Download size={18} /> },
   ];
 
   if (!isOpen) return null;
@@ -522,20 +561,258 @@ const SettingsPanel = ({
             </div>
           )}
 
+          {/* 签到设置 */}
+          {activeTab === 'checkin' && (
+            <div className="space-y-4">
+              {/* 签到大屏入口 - 高亮展示 */}
+              {onOpenCheckInDisplay && (
+                <button
+                  onClick={() => {
+                    onClose();
+                    onOpenCheckInDisplay();
+                  }}
+                  className="w-full flex items-center justify-between px-5 py-5 bg-gradient-to-r from-green-500/20 via-emerald-600/15 to-teal-500/10 rounded-2xl border border-green-500/30 hover:border-green-500/50 transition-all group shadow-lg"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center shadow-lg">
+                      <Monitor size={24} className="text-white" />
+                    </div>
+                    <div className="text-left">
+                      <span className="text-white font-bold text-lg block">打开签到大屏</span>
+                      <span className="text-gray-400 text-sm">实时展示签到动态</span>
+                    </div>
+                  </div>
+                  <ChevronRight size={24} className="text-green-400 group-hover:translate-x-1 transition-transform" />
+                </button>
+              )}
+
+              {/* 签到统计 */}
+              <div className="p-4 bg-white/5 rounded-xl border border-white/10">
+                <div className="flex items-center gap-2 mb-3">
+                  <QrCode size={18} className="text-green-400" />
+                  <span className="font-medium text-white">签到统计</span>
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="text-center">
+                    <p className="text-2xl font-bold text-white">{participants.length}</p>
+                    <p className="text-xs text-gray-500">总人数</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-2xl font-bold text-green-400">{checkInStats.checkedInCount}</p>
+                    <p className="text-xs text-gray-500">已签到</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-2xl font-bold text-blue-400">{checkInStats.checkInPercentage}%</p>
+                    <p className="text-xs text-gray-500">签到率</p>
+                  </div>
+                </div>
+                <button
+                  onClick={loadCheckInData}
+                  className="w-full mt-3 py-2 text-xs text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+                >
+                  刷新统计
+                </button>
+              </div>
+
+              {/* 活动名称 */}
+              <div className="p-4 bg-white/5 rounded-xl border border-white/10 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={16} className="text-yellow-400" />
+                  <span className="font-medium text-white text-sm">活动配置</span>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">活动名称</label>
+                  <input
+                    type="text"
+                    value={checkInSettings.eventName}
+                    onChange={(e) => updateCheckInSettings({ eventName: e.target.value })}
+                    className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500/50"
+                    placeholder="例如：2026年度盛典"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">活动日期</label>
+                  <input
+                    type="date"
+                    value={checkInSettings.eventDate}
+                    onChange={(e) => updateCheckInSettings({ eventDate: e.target.value })}
+                    className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-green-500/50"
+                  />
+                </div>
+              </div>
+
+              {/* 位置设置 */}
+              <div className="p-4 bg-white/5 rounded-xl border border-white/10 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <MapPin size={16} className="text-blue-400" />
+                    <span className="font-medium text-white text-sm">位置验证</span>
+                  </div>
+                  <button
+                    onClick={() => updateCheckInSettings({ requireLocation: !checkInSettings.requireLocation })}
+                    className={`w-10 h-5 rounded-full transition-colors ${
+                      checkInSettings.requireLocation ? 'bg-green-500' : 'bg-gray-600'
+                    }`}
+                  >
+                    <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      checkInSettings.requireLocation ? 'translate-x-5' : 'translate-x-0.5'
+                    }`} />
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500">
+                  开启后，签到时将验证用户地理位置
+                </p>
+                
+                {checkInSettings.requireLocation && (
+                  <div className="pt-2 space-y-2">
+                    <input
+                      type="text"
+                      value={checkInSettings.locationName || ''}
+                      onChange={(e) => updateCheckInSettings({ locationName: e.target.value })}
+                      className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500/50"
+                      placeholder="活动地点名称"
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="number"
+                        step="0.000001"
+                        value={checkInSettings.locationLat || ''}
+                        onChange={(e) => updateCheckInSettings({ locationLat: parseFloat(e.target.value) || undefined })}
+                        className="px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500/50"
+                        placeholder="纬度"
+                      />
+                      <input
+                        type="number"
+                        step="0.000001"
+                        value={checkInSettings.locationLng || ''}
+                        onChange={(e) => updateCheckInSettings({ locationLng: parseFloat(e.target.value) || undefined })}
+                        className="px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500/50"
+                        placeholder="经度"
+                      />
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (navigator.geolocation) {
+                          navigator.geolocation.getCurrentPosition(
+                            (pos) => {
+                              updateCheckInSettings({
+                                locationLat: pos.coords.latitude,
+                                locationLng: pos.coords.longitude,
+                              });
+                              showSuccess(`已获取当前位置`);
+                            },
+                            (err) => showError('获取位置失败：' + err.message)
+                          );
+                        }
+                      }}
+                      className="w-full py-2 text-xs text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 rounded-lg transition-colors border border-blue-500/20"
+                    >
+                      获取当前位置
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* 大屏配置 */}
+              <div className="p-4 bg-white/5 rounded-xl border border-white/10 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Settings2 size={16} className="text-purple-400" />
+                  <span className="font-medium text-white text-sm">大屏配置</span>
+                </div>
+                
+                {/* 显示二维码 */}
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-sm text-gray-400">显示签到二维码</span>
+                  <button
+                    onClick={() => updateCheckInSettings({ showQRCode: !checkInSettings.showQRCode })}
+                    className={`w-10 h-5 rounded-full transition-colors ${
+                      checkInSettings.showQRCode ? 'bg-green-500' : 'bg-gray-600'
+                    }`}
+                  >
+                    <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      checkInSettings.showQRCode ? 'translate-x-5' : 'translate-x-0.5'
+                    }`} />
+                  </button>
+                </div>
+
+                {/* 显示部门统计 */}
+                <div className="flex items-center justify-between py-2 border-t border-white/5">
+                  <span className="text-sm text-gray-400">显示部门统计</span>
+                  <button
+                    onClick={() => updateCheckInSettings({ showDepartmentStats: !checkInSettings.showDepartmentStats })}
+                    className={`w-10 h-5 rounded-full transition-colors ${
+                      checkInSettings.showDepartmentStats ? 'bg-green-500' : 'bg-gray-600'
+                    }`}
+                  >
+                    <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      checkInSettings.showDepartmentStats ? 'translate-x-5' : 'translate-x-0.5'
+                    }`} />
+                  </button>
+                </div>
+
+                {/* 动画风格 */}
+                <div className="pt-2 border-t border-white/5">
+                  <label className="block text-xs text-gray-400 mb-2">动画风格</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['slide', 'fade', 'bounce'] as const).map(style => (
+                      <button
+                        key={style}
+                        onClick={() => updateCheckInSettings({ animationStyle: style })}
+                        className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                          checkInSettings.animationStyle === style
+                            ? 'bg-purple-500/20 border-purple-500/50 text-purple-400 border'
+                            : 'bg-white/5 border-white/10 text-gray-400 border hover:bg-white/10'
+                        }`}
+                      >
+                        {style === 'slide' ? '滑入' : style === 'fade' ? '淡入' : '弹入'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* 数据操作 */}
+              <div className="border-t border-white/10 pt-4">
+                <button
+                  onClick={handleClearCheckInRecords}
+                  className="w-full py-2.5 px-4 bg-red-500/10 text-red-400 text-sm font-medium rounded-xl hover:bg-red-500/20 transition-colors flex items-center justify-center gap-2 border border-red-500/30"
+                >
+                  <Trash2 size={16} />
+                  清除签到记录
+                </button>
+                <p className="text-xs text-gray-600 text-center mt-2">
+                  提示：参与者名单使用"导入名单"中的数据
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* 数据导出 */}
           {activeTab === 'export' && (
             <div className="space-y-4">
               <div className="p-4 bg-white/5 rounded-xl border border-white/10">
                 <div className="flex items-center gap-2 mb-3">
                   <Award size={20} className="text-[#b63cfa]" />
-                  <span className="font-medium text-white">中奖统计</span>
+                  <span className="font-medium text-white">抽奖统计</span>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-4 gap-4">
                   <div>
-                    <p className="text-2xl font-bold text-white">
+                    <p className="text-2xl font-bold text-white">{participants.length}</p>
+                    <p className="text-xs text-gray-500">总人数</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-[#b63cfa]">
                       {records.reduce((sum, r) => sum + r.winners.length, 0)}
                     </p>
-                    <p className="text-xs text-gray-500">中奖人数</p>
+                    <p className="text-xs text-gray-500">已中奖</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-[#3c80fa]">
+                      {participants.length > 0 
+                        ? ((records.reduce((sum, r) => sum + r.winners.length, 0) / participants.length) * 100).toFixed(1)
+                        : 0}%
+                    </p>
+                    <p className="text-xs text-gray-500">中奖率</p>
                   </div>
                   <div>
                     <p className="text-2xl font-bold text-white">{records.length}</p>
@@ -545,7 +822,12 @@ const SettingsPanel = ({
               </div>
 
               <button
-                onClick={() => exportWinnersToExcel(records)}
+                onClick={() => {
+                  const success = exportWinnersToExcel(records);
+                  if (!success) {
+                    showWarning('暂无中奖记录可导出');
+                  }
+                }}
                 disabled={records.length === 0}
                 className="w-full py-3 px-4 bg-gradient-to-r from-[#3c80fa] to-[#573cfa] text-white font-medium rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -556,8 +838,9 @@ const SettingsPanel = ({
               <div className="border-t border-white/10 pt-4 mt-6">
                 <h3 className="text-sm font-medium text-gray-400 mb-3">危险操作</h3>
                 <button
-                  onClick={() => {
-                    if (confirm('确定要清除所有数据吗？此操作不可恢复！')) {
+                  onClick={async () => {
+                    const confirmed = await showConfirm('确定要清除所有数据吗？此操作不可恢复！');
+                    if (confirmed) {
                       onClearAll();
                     }
                   }}

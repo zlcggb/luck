@@ -124,8 +124,8 @@ export const importParticipantsFromExcel = async (file: File): Promise<Participa
   return processImportData(data, mapping);
 };
 
-// 导出中奖记录到 Excel
-export const exportWinnersToExcel = (records: DrawRecord[], filename = '年会中奖名单') => {
+// 导出中奖记录到 Excel，返回是否成功
+export const exportWinnersToExcel = (records: DrawRecord[], filename = '年会中奖名单'): boolean => {
   const rows: Record<string, string>[] = [];
   
   records.forEach((record) => {
@@ -141,8 +141,7 @@ export const exportWinnersToExcel = (records: DrawRecord[], filename = '年会�
   });
   
   if (rows.length === 0) {
-    alert('暂无中奖记录可导出');
-    return;
+    return false; // 让调用方决定如何提示
   }
   
   const worksheet = XLSX.utils.json_to_sheet(rows);
@@ -176,6 +175,7 @@ export const exportWinnersToExcel = (records: DrawRecord[], filename = '年会�
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  return true;
 };
 
 // 生成导入模板

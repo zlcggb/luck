@@ -16,6 +16,7 @@ import {
   calculateSummaryLayout
 } from './utils/layoutAlgorithm';
 import SettingsPanel from './components/SettingsPanel';
+import { useModal } from './contexts/ModalContext';
 
 // --- 配置色系 ---
 const COLORS = {
@@ -33,7 +34,11 @@ const MOCK_PARTICIPANTS: Participant[] = Array.from({ length: 100 }).map((_, i) 
   dept: i % 3 === 0 ? '技术研发中心' : i % 3 === 1 ? '全球市场部' : '综合管理部',
 }));
 
-const App = () => {
+interface AppProps {
+  onOpenCheckInDisplay?: () => void;
+}
+
+const App = ({ onOpenCheckInDisplay }: AppProps) => {
   // 核心状态
   const [participants, setParticipants] = useState<Participant[]>([]); // 所有参与者
   const [prizes, setPrizes] = useState<Prize[]>(DEFAULT_PRIZES);        // 奖项配置
@@ -54,6 +59,9 @@ const App = () => {
   const [batchSize, setBatchSize] = useState(1);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // 使用内部弹窗
+  const { showWarning, showConfirm } = useModal();
 
   // --- 初始化：从 LocalStorage 加载数据 ---
   const [isInitialized, setIsInitialized] = useState(false);
@@ -230,25 +238,25 @@ const App = () => {
 
   const startLottery = () => {
     if (availableParticipants.length === 0) {
-      alert("奖池已空！请导入参与者名单。");
+      showWarning("奖池已空！请导入参与者名单。");
       return;
     }
     if (availableParticipants.length < batchSize) {
-      alert(`奖池人数不足 ${batchSize} 人！`);
+      showWarning(`奖池人数不足 ${batchSize} 人！`);
       return;
     }
     if (!currentPrize) {
-      alert("请先选择一个奖项！");
+      showWarning("请先选择一个奖项！");
       return;
     }
     if (currentPrize.drawn >= currentPrize.count) {
-      alert(`${currentPrize.name} 已全部抽完！`);
+      showWarning(`${currentPrize.name} 已全部抽完！`);
       return;
     }
     // 检查抽取人数是否超过剩余名额
     const remaining = currentPrize.count - currentPrize.drawn;
     if (batchSize > remaining) {
-      alert(`${currentPrize.name} 剩余 ${remaining} 个名额，无法抽取 ${batchSize} 人！`);
+      showWarning(`${currentPrize.name} 剩余 ${remaining} 个名额，无法抽取 ${batchSize} 人！`);
       return;
     }
 
@@ -296,11 +304,12 @@ const App = () => {
   };
 
   // 撤销某轮抽奖
-  const handleUndoRecord = (recordId: string) => {
+  const handleUndoRecord = async (recordId: string) => {
     const record = records.find(r => r.id === recordId);
     if (!record) return;
     
-    if (!confirm(`确定要撤销本轮抽奖吗？\n奖项：${record.prizeName}\n中奖者：${record.winners.map(w => w.name).join('、')}`)) {
+    const confirmed = await showConfirm(`确定要撤销本轮抽奖吗？\n奖项：${record.prizeName}\n中奖者：${record.winners.map(w => w.name).join('、')}`);
+    if (!confirmed) {
       return;
     }
     
@@ -380,35 +389,6 @@ const App = () => {
 
           {/* 右侧控制区 */}
           <div className="flex items-center gap-2 md:gap-6">
-            {/* 统计信息 */}
-            <div className="hidden md:flex items-center gap-4 mr-2">
-              <div className="flex items-center gap-1.5">
-                <span className="text-gray-500 text-xs">总人数</span>
-                <span className="font-bold text-white text-sm">{participants.length}</span>
-              </div>
-              <div className="h-4 w-[1px] bg-white/10"></div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-gray-500 text-xs">已中奖</span>
-                <span className="font-bold text-[#b63cfa] text-sm">{excludedIds.size}</span>
-              </div>
-              <div className="h-4 w-[1px] bg-white/10"></div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-gray-500 text-xs">中奖率</span>
-                <span className="font-bold text-[#3c80fa] text-sm">
-                  {participants.length > 0 ? ((excludedIds.size / participants.length) * 100).toFixed(1) : 0}%
-                </span>
-              </div>
-            </div>
-            
-            {/* 移动端简化统计 */}
-            <div className="flex md:hidden items-center gap-1 bg-white/5 px-2 py-1 rounded-lg border border-white/10">
-              <span className="text-[10px] text-gray-400">{excludedIds.size}</span>
-              <span className="text-[10px] text-gray-600">/</span>
-              <span className="text-[10px] text-white">{participants.length}</span>
-              <span className="text-[8px] text-[#3c80fa] ml-1">
-                ({participants.length > 0 ? ((excludedIds.size / participants.length) * 100).toFixed(0) : 0}%)
-              </span>
-            </div>
             
             {/* 抽取人数选择 */}
             <div className="flex items-center bg-[#0b0a1a]/50 backdrop-blur-md rounded-xl p-1 border border-white/10 shadow-inner scale-90 md:scale-100 origin-right">
@@ -1132,7 +1112,6 @@ const App = () => {
 
       </div>
 
-      {/* 设置面板 */}
       <SettingsPanel
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -1144,6 +1123,7 @@ const App = () => {
         onRecordsChange={setRecords}
         onUndoRecord={handleUndoRecord}
         onClearAll={handleClearAll}
+        onOpenCheckInDisplay={onOpenCheckInDisplay}
       />
     </div>
   );
