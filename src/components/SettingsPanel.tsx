@@ -37,6 +37,7 @@ const SettingsPanel = ({
   const [activeTab, setActiveTab] = useState<TabType>('import');
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   // 用于导入预览的状态
   const [previewFile, setPreviewFile] = useState<{ headers: string[], data: any[] } | null>(null);
@@ -151,12 +152,21 @@ const SettingsPanel = ({
         {/* 头部 */}
         <div className="flex items-center justify-between p-4 border-b border-white/10">
           <h2 className="text-xl font-bold text-white">设置</h2>
-          <button 
-            onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-          >
-            <X size={20} className="text-gray-400" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setShowResetConfirm(true)}
+              className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg text-red-400 text-sm font-medium transition-colors flex items-center gap-1.5"
+            >
+              <RotateCcw size={14} />
+              重置数据
+            </button>
+            <button 
+              onClick={onClose}
+              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+            >
+              <X size={20} className="text-gray-400" />
+            </button>
+          </div>
         </div>
 
         {/* Tab 导航 */}
@@ -561,6 +571,75 @@ const SettingsPanel = ({
           )}
         </div>
       </div>
+
+      {/* 重置确认弹窗 */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          {/* 遮罩 */}
+          <div 
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => setShowResetConfirm(false)}
+          />
+          
+          {/* 弹窗内容 */}
+          <div className="relative bg-gradient-to-br from-[#1a1535] to-[#0f0c29] border border-white/10 rounded-2xl shadow-2xl max-w-sm w-full p-6 animate-fade-in">
+            {/* 警告图标 */}
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/20 flex items-center justify-center">
+              <AlertCircle size={32} className="text-red-400" />
+            </div>
+            
+            {/* 标题 */}
+            <h3 className="text-xl font-bold text-white text-center mb-2">
+              确认重置所有数据？
+            </h3>
+            
+            {/* 描述 */}
+            <p className="text-gray-400 text-sm text-center mb-6">
+              此操作将清除以下所有数据，且<span className="text-red-400 font-medium">无法恢复</span>：
+            </p>
+            
+            {/* 数据列表 */}
+            <div className="bg-black/30 rounded-xl p-4 mb-6 space-y-2">
+              <div className="flex items-center gap-2 text-sm">
+                <div className="w-2 h-2 rounded-full bg-red-400"></div>
+                <span className="text-gray-300">参与者名单（{participants.length} 人）</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <div className="w-2 h-2 rounded-full bg-red-400"></div>
+                <span className="text-gray-300">奖项配置（{prizes.length} 个奖项）</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <div className="w-2 h-2 rounded-full bg-red-400"></div>
+                <span className="text-gray-300">抽奖记录（{records.length} 条记录）</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <div className="w-2 h-2 rounded-full bg-red-400"></div>
+                <span className="text-gray-300">已中奖名单</span>
+              </div>
+            </div>
+            
+            {/* 按钮 */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                className="flex-1 py-3 px-4 bg-white/5 hover:bg-white/10 text-gray-300 font-medium rounded-xl transition-colors border border-white/10"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => {
+                  onClearAll();
+                  setShowResetConfirm(false);
+                  onClose();
+                }}
+                className="flex-1 py-3 px-4 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl transition-colors shadow-lg shadow-red-500/20"
+              >
+                确认重置
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

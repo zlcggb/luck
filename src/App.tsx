@@ -56,6 +56,8 @@ const App = () => {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // --- 初始化：从 LocalStorage 加载数据 ---
+  const [isInitialized, setIsInitialized] = useState(false);
+  
   useEffect(() => {
     const savedParticipants = loadParticipants();
     const savedPrizes = loadPrizes();
@@ -73,26 +75,31 @@ const App = () => {
       const firstUnfinished = savedPrizes.find(p => p.drawn < p.count);
       setCurrentPrizeId(firstUnfinished?.id || savedPrizes[0].id);
     }
+    
+    // 标记初始化完成
+    setIsInitialized(true);
   }, []);
 
-  // --- 持久化数据 ---
+  // --- 持久化数据（只在初始化完成后才保存） ---
   useEffect(() => {
-    if (participants.length > 0 && participants !== MOCK_PARTICIPANTS) {
-      saveParticipants(participants);
-    }
-  }, [participants]);
+    if (!isInitialized) return;
+    saveParticipants(participants);
+  }, [participants, isInitialized]);
 
   useEffect(() => {
+    if (!isInitialized) return;
     savePrizes(prizes);
-  }, [prizes]);
+  }, [prizes, isInitialized]);
 
   useEffect(() => {
+    if (!isInitialized) return;
     saveRecords(records);
-  }, [records]);
+  }, [records, isInitialized]);
 
   useEffect(() => {
+    if (!isInitialized) return;
     saveExcludedIds(excludedIds);
-  }, [excludedIds]);
+  }, [excludedIds, isInitialized]);
 
   // --- 计算可用参与者（排除已中奖的） ---
   const availableParticipants = participants.filter(p => !excludedIds.has(p.id));
@@ -373,6 +380,36 @@ const App = () => {
 
           {/* 右侧控制区 */}
           <div className="flex items-center gap-2 md:gap-6">
+            {/* 统计信息 */}
+            <div className="hidden md:flex items-center gap-4 mr-2">
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500 text-xs">总人数</span>
+                <span className="font-bold text-white text-sm">{participants.length}</span>
+              </div>
+              <div className="h-4 w-[1px] bg-white/10"></div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500 text-xs">已中奖</span>
+                <span className="font-bold text-[#b63cfa] text-sm">{excludedIds.size}</span>
+              </div>
+              <div className="h-4 w-[1px] bg-white/10"></div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500 text-xs">中奖率</span>
+                <span className="font-bold text-[#3c80fa] text-sm">
+                  {participants.length > 0 ? ((excludedIds.size / participants.length) * 100).toFixed(1) : 0}%
+                </span>
+              </div>
+            </div>
+            
+            {/* 移动端简化统计 */}
+            <div className="flex md:hidden items-center gap-1 bg-white/5 px-2 py-1 rounded-lg border border-white/10">
+              <span className="text-[10px] text-gray-400">{excludedIds.size}</span>
+              <span className="text-[10px] text-gray-600">/</span>
+              <span className="text-[10px] text-white">{participants.length}</span>
+              <span className="text-[8px] text-[#3c80fa] ml-1">
+                ({participants.length > 0 ? ((excludedIds.size / participants.length) * 100).toFixed(0) : 0}%)
+              </span>
+            </div>
+            
             {/* 抽取人数选择 */}
             <div className="flex items-center bg-[#0b0a1a]/50 backdrop-blur-md rounded-xl p-1 border border-white/10 shadow-inner scale-90 md:scale-100 origin-right">
               {availableBatchSizes.length === 0 ? (
