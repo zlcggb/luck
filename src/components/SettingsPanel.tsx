@@ -4,7 +4,7 @@ import {
   Trash2, Plus, Minus, RotateCcw, AlertCircle
 } from 'lucide-react';
 import { Participant, Prize, DrawRecord } from '../types';
-import { exportWinnersToExcel, downloadTemplate } from '../utils/excel';
+import { exportWinnersToExcel, downloadTemplate, parseExcelFile, processImportData } from '../utils/excel';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -49,7 +49,7 @@ const SettingsPanel = ({
 
     try {
       setImporting(true);
-      const { headers, data } = await import('../utils/excel').then(m => m.parseExcelFile(file));
+      const { headers, data } = await parseExcelFile(file);
       
       if (headers.length === 0 || data.length === 0) {
         alert('文件内容为空或格式不正确');
@@ -84,17 +84,15 @@ const SettingsPanel = ({
       return;
     }
 
-    // 动态导入处理函数
-    import('../utils/excel').then(({ processImportData }) => {
-      const imported = processImportData(previewFile.data, columnMapping);
-      if (imported.length === 0) {
-        alert('未能提取到有效数据，请检查映射关系');
-        return;
-      }
-      onParticipantsChange(imported);
-      alert(`成功导入 ${imported.length} 名参与者！`);
-      setPreviewFile(null);
-    });
+    // 直接调用处理函数
+    const imported = processImportData(previewFile.data, columnMapping);
+    if (imported.length === 0) {
+      alert('未能提取到有效数据，请检查映射关系');
+      return;
+    }
+    onParticipantsChange(imported);
+    alert(`成功导入 ${imported.length} 名参与者！`);
+    setPreviewFile(null);
   };
 
   const cancelPreview = () => {
