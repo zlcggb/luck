@@ -1,14 +1,30 @@
-import { useState, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   X, Upload, Download, FileSpreadsheet, Award, History, 
   Trash2, Plus, Minus, RotateCcw, AlertCircle, QrCode, MapPin,
-  Sparkles, ChevronRight, Monitor, Settings2
+  Sparkles, ChevronRight, Monitor, Settings2, FolderOpen, Loader2,
+  LogIn, Search, UserPlus, Eye
 } from 'lucide-react';
 import { Participant, Prize, DrawRecord } from '../types';
 import { exportWinnersToExcel, downloadTemplate, parseExcelFile, processImportData } from '../utils/excel';
 import { CheckInSettings, DEFAULT_CHECKIN_SETTINGS } from '../types/checkin';
 import { saveCheckInSettings, loadCheckInSettings, clearCheckInRecords, calculateStats } from '../utils/checkinStorage';
 import { useModal } from '../contexts/ModalContext';
+import { 
+  importParticipants,
+  addParticipant,
+  getParticipantCount,
+  getCheckInCount,
+  LuckEvent,
+  getUserProjects,
+  createProject,
+  deleteProject,
+  getOrCreateUser,
+  getActiveEvent,
+  clearCheckInRecordsForEvent,
+  supabase
+} from '../utils/supabaseCheckin';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -21,7 +37,9 @@ interface SettingsPanelProps {
   onRecordsChange: (records: DrawRecord[]) => void;
   onUndoRecord: (recordId: string) => void;
   onClearAll: () => void;
-  onOpenCheckInDisplay?: () => void; // 打开签到大屏
+  onOpenCheckInDisplay?: () => void;
+  currentEventId?: string;
+  onEventChange?: (eventId: string) => void;
 }
 
 type TabType = 'import' | 'prizes' | 'history' | 'export' | 'checkin';
@@ -34,20 +52,42 @@ const SettingsPanel = ({
   prizes,
   onPrizesChange,
   records,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onRecordsChange: _onRecordsChange,
   onUndoRecord,
   onClearAll,
   onOpenCheckInDisplay,
+  currentEventId,
+  onEventChange,
 }: SettingsPanelProps) => {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('import');
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   
+  // Auth State
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  // 项目管理状态
+  const [projects, setProjects] = useState<LuckEvent[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(currentEventId || null);
+  const [loadingProjects, setLoadingProjects] = useState(false);
+  const [showNewProjectInput, setShowNewProjectInput] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [creatingProject, setCreatingProject] = useState(false);
+  
   // 签到相关状态
   const [checkInSettings, setCheckInSettings] = useState<CheckInSettings>(DEFAULT_CHECKIN_SETTINGS);
-  const [checkInStats, setCheckInStats] = useState({ checkedInCount: 0, checkInPercentage: 0 });
+  const [checkInStats, setCheckInStats] = useState({ checkedInCount: 0, checkInPercentage: 0, dbParticipantCount: 0 });
+
+  // 名单查看和添加成员状态
+  const [showParticipantsList, setShowParticipantsList] = useState(false);
+  const [participantsSearchQuery, setParticipantsSearchQuery] = useState('');
+  const [showAddMemberForm, setShowAddMemberForm] = useState(false);
+  const [newMember, setNewMember] = useState({ id: '', name: '', dept: '' });
+
+  // 活动状态
+
 
   // 使用内部弹窗
   const { showSuccess, showWarning, showError, showConfirm } = useModal();
@@ -56,7 +96,189 @@ const SettingsPanel = ({
   const [previewFile, setPreviewFile] = useState<{ headers: string[], data: any[] } | null>(null);
   const [columnMapping, setColumnMapping] = useState({ id: '', name: '', dept: '' });
 
-  // 处理文件选择（第一步：解析预览）
+  // LocalStorage 键名
+  const LAST_EVENT_KEY = 'luck_last_event_id';
+
+  // 加载项目列表 - 混合关联策略
+  // 优先级：1. 登录用户项目 → 2. URL参数 → 3. LocalStorage缓存 → 4. 全局活跃活动
+  const loadProjects = async () => {
+    setLoadingProjects(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      setCurrentUser(user);
+      
+      let availableProjects: LuckEvent[] = [];
+      let preferredEventId: string | null = null;
+
+      // 策略1：已登录用户 - 获取用户关联的项目
+      if (user) {
+        const luckUser = await getOrCreateUser({
+          id: user.id,
+          email: user.email || '',
+          name: user.user_metadata?.name
+        });
+        if (luckUser) {
+          availableProjects = await getUserProjects(luckUser.id);
+        }
+      }
+      
+      // 策略2：检查 URL 参数中的 event ID
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlEventId = urlParams.get('event');
+      if (urlEventId) {
+        preferredEventId = urlEventId;
+        console.log('📍 从URL参数获取活动ID:', urlEventId);
+      }
+      
+      // 策略3：检查 LocalStorage 中缓存的上次活动
+      if (!preferredEventId) {
+        const cachedEventId = localStorage.getItem(LAST_EVENT_KEY);
+        if (cachedEventId) {
+          preferredEventId = cachedEventId;
+          console.log('💾 从LocalStorage获取活动ID:', cachedEventId);
+        }
+      }
+      
+      // 策略4：未登录或无项目时，获取全局活跃活动
+      if (availableProjects.length === 0) {
+        const activeEvent = await getActiveEvent();
+        if (activeEvent) {
+          availableProjects.push(activeEvent);
+          // 如果没有首选活动，使用全局活跃活动
+          if (!preferredEventId) {
+            preferredEventId = activeEvent.id;
+            console.log('🌍 使用全局活跃活动:', activeEvent.name);
+          }
+        }
+      }
+
+      setProjects(availableProjects);
+
+      // 确定最终选中的项目
+      let finalSelectedId: string | null = null;
+      
+      if (preferredEventId && availableProjects.find(p => p.id === preferredEventId)) {
+        // 首选活动在可用列表中
+        finalSelectedId = preferredEventId;
+      } else if (availableProjects.length > 0) {
+        // 默认选择第一个可用项目
+        finalSelectedId = availableProjects[0].id;
+      }
+      
+      // 更新选中状态
+      if (finalSelectedId && finalSelectedId !== selectedProjectId) {
+        setSelectedProjectId(finalSelectedId);
+        onEventChange?.(finalSelectedId);
+        // 持久化到 LocalStorage
+        localStorage.setItem(LAST_EVENT_KEY, finalSelectedId);
+        console.log('✅ 已关联活动:', finalSelectedId);
+      } else if (!finalSelectedId) {
+        setSelectedProjectId(null);
+        localStorage.removeItem(LAST_EVENT_KEY);
+      }
+    } catch (err) {
+      console.error('加载项目失败:', err);
+    } finally {
+      setLoadingProjects(false);
+    }
+  };
+
+  // 创建新项目
+  const handleCreateProject = async () => {
+    if (!newProjectName.trim()) {
+      showWarning('请输入项目名称');
+      return;
+    }
+    setCreatingProject(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const luckUser = await getOrCreateUser({
+          id: user.id,
+          email: user.email || '',
+          name: user.user_metadata?.name
+        });
+        if (luckUser) {
+          const newProject = await createProject(luckUser.id, { name: newProjectName.trim() });
+          if (newProject) {
+            setProjects(prev => [...prev, newProject]);
+            setSelectedProjectId(newProject.id);
+            onEventChange?.(newProject.id);
+            showSuccess('项目创建成功！');
+            setNewProjectName('');
+            setShowNewProjectInput(false);
+          }
+        }
+      }
+    } catch (err) {
+      showError('创建项目失败');
+      console.error(err);
+    } finally {
+      setCreatingProject(false);
+    }
+  };
+
+  // 删除项目
+  const handleDeleteProject = async (projectId: string) => {
+    const confirmed = await showConfirm('确定要删除此项目吗？所有相关数据将被清除。');
+    if (!confirmed) return;
+    
+    try {
+      const success = await deleteProject(projectId);
+      if (success) {
+        setProjects(prev => prev.filter(p => p.id !== projectId));
+        if (selectedProjectId === projectId) {
+          const remaining = projects.filter(p => p.id !== projectId);
+          if (remaining.length > 0) {
+            setSelectedProjectId(remaining[0].id);
+            onEventChange?.(remaining[0].id);
+          } else {
+            setSelectedProjectId(null);
+          }
+        }
+        showSuccess('项目已删除');
+      }
+    } catch (err) {
+      showError('删除项目失败');
+      console.error(err);
+    }
+  };
+
+  // 选择项目
+  const handleSelectProject = (projectId: string) => {
+    setSelectedProjectId(projectId);
+    onEventChange?.(projectId);
+    // 持久化到 LocalStorage，下次访问时自动关联
+    localStorage.setItem(LAST_EVENT_KEY, projectId);
+    console.log('📌 已切换并保存活动:', projectId);
+  };
+
+  // 初始化加载
+  useEffect(() => {
+    if (isOpen) {
+      loadProjects();
+      loadCheckInData();
+    }
+  }, [isOpen]);
+
+  // 当选中项目变化时加载数据
+  useEffect(() => {
+    const loadEventData = async () => {
+      if (selectedProjectId) {
+        const dbCount = await getParticipantCount(selectedProjectId);
+        const checkInCount = await getCheckInCount(selectedProjectId);
+        setCheckInStats(prev => ({ 
+          ...prev, 
+          dbParticipantCount: dbCount,
+          checkedInCount: checkInCount,
+          checkInPercentage: dbCount > 0 ? Math.round((checkInCount / dbCount) * 100) : 0
+        }));
+      }
+    };
+    loadEventData();
+  }, [selectedProjectId]);
+
+  // 处理文件选择
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -72,7 +294,6 @@ const SettingsPanel = ({
 
       setPreviewFile({ headers, data });
       
-      // 尝试自动匹配
       const autoMapping = {
         id: headers.find(h => ['工号', 'ID', 'id', 'EmployeeID', '工号/ID'].includes(h)) || headers[0] || '',
         name: headers.find(h => ['姓名', 'Name', 'name', '员工姓名'].includes(h)) || headers[1] || '',
@@ -83,29 +304,54 @@ const SettingsPanel = ({
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '无法解析 Excel 文件';
       showError(errorMessage);
-      console.error('[Excel Import Error]', error);
     } finally {
       setImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  // 确认导入（第二步：处理数据）
-  const confirmImport = () => {
+  // 确认导入
+  const confirmImport = async () => {
     if (!previewFile) return;
     if (!columnMapping.name) {
       showWarning('请至少选择"姓名"对应的列');
       return;
     }
 
-    // 直接调用处理函数
     const imported = processImportData(previewFile.data, columnMapping);
     if (imported.length === 0) {
       showError('未能提取到有效数据，请检查映射关系');
       return;
     }
+    
     onParticipantsChange(imported);
-    showSuccess(`成功导入 ${imported.length} 名参与者！`);
+    
+    if (selectedProjectId) {
+      // Syncing start removed
+      try {
+        const dbData = imported.map(p => ({
+          employee_id: p.id,
+          name: p.name,
+          department: p.dept,
+        }));
+        
+        const result = await importParticipants(selectedProjectId, dbData);
+        
+        if (result.success) {
+          showSuccess(`成功导入 ${imported.length} 名参与者，已同步到数据库！`);
+          setCheckInStats(prev => ({ ...prev, dbParticipantCount: result.count }));
+        } else {
+          showWarning(`本地导入成功，但同步到数据库失败：${result.error}`);
+        }
+      } catch (err) {
+        showWarning('本地导入成功，但同步到数据库时发生错误');
+      } finally {
+        // Syncing end removed
+      }
+    } else {
+      showSuccess(`成功导入 ${imported.length} 名参与者！(未选择项目，仅保存本地)`);
+    }
+    
     setPreviewFile(null);
   };
 
@@ -114,7 +360,79 @@ const SettingsPanel = ({
     setColumnMapping({ id: '', name: '', dept: '' });
   };
 
-  // 添加奖项
+  // 成员管理操作
+  const handleAddMember = async () => {
+    if (!newMember.name.trim()) {
+      showWarning('请输入姓名');
+      return;
+    }
+    
+    const memberId = newMember.id.trim() || `auto_${Date.now()}`;
+    
+    // 检查是否已存在
+    if (participants.some(p => p.id === memberId)) {
+      showWarning('该工号已存在');
+      return;
+    }
+    
+    const member: Participant = {
+      id: memberId,
+      name: newMember.name.trim(),
+      dept: newMember.dept.trim() || '未分配',
+    };
+    
+    const updatedParticipants = [...participants, member];
+    onParticipantsChange(updatedParticipants);
+    
+    // 如果有选中项目，同步到数据库
+    if (selectedProjectId) {
+      try {
+        const result = await addParticipant(selectedProjectId, {
+          employee_id: member.id,
+          name: member.name,
+          department: member.dept,
+        });
+        
+        if (result.success) {
+          showSuccess(`已添加成员 "${member.name}" 并同步到云端`);
+        } else {
+          showWarning(`已添加成员 "${member.name}"，但同步云端失败：${result.error}`);
+        }
+      } catch (err) {
+        showWarning(`已添加成员 "${member.name}"，但同步云端失败`);
+      }
+    } else {
+      showSuccess(`已添加成员 "${member.name}"`);
+    }
+    
+    // 重置表单
+    setNewMember({ id: '', name: '', dept: '' });
+    setShowAddMemberForm(false);
+  };
+
+  const handleDeleteMember = async (memberId: string) => {
+    const member = participants.find(p => p.id === memberId);
+    if (!member) return;
+    
+    const confirmed = await showConfirm(`确定要删除成员 "${member.name}" 吗？`);
+    if (!confirmed) return;
+    
+    const updatedParticipants = participants.filter(p => p.id !== memberId);
+    onParticipantsChange(updatedParticipants);
+    
+    // TODO: 如果需要同步删除云端数据，在这里添加
+    showSuccess(`已删除成员 "${member.name}"`);
+  };
+
+  // 过滤后的参与者列表
+  const filteredParticipants = participants.filter(p => {
+    const query = participantsSearchQuery.toLowerCase();
+    return p.name.toLowerCase().includes(query) || 
+           p.id.toLowerCase().includes(query) ||
+           p.dept.toLowerCase().includes(query);
+  });
+
+  // 奖项操作
   const addPrize = () => {
     const newPrize: Prize = {
       id: `prize_${Date.now()}`,
@@ -126,14 +444,12 @@ const SettingsPanel = ({
     onPrizesChange([...prizes, newPrize]);
   };
 
-  // 更新奖项
   const updatePrize = (id: string, field: keyof Prize, value: string | number) => {
     onPrizesChange(
       prizes.map(p => p.id === id ? { ...p, [field]: value } : p)
     );
   };
 
-  // 删除奖项
   const deletePrize = (id: string) => {
     if (prizes.length <= 1) {
       showWarning('至少保留一个奖项');
@@ -142,28 +458,57 @@ const SettingsPanel = ({
     onPrizesChange(prizes.filter(p => p.id !== id));
   };
 
-  // 加载签到设置和统计
+  // 签到数据
   const loadCheckInData = () => {
     const settings = loadCheckInSettings();
     setCheckInSettings(settings);
     const stats = calculateStats();
-    setCheckInStats({ checkedInCount: stats.checkedInCount, checkInPercentage: stats.checkInPercentage });
+    setCheckInStats({ checkedInCount: stats.checkedInCount, checkInPercentage: stats.checkInPercentage, dbParticipantCount: 0 });
   };
 
-  // 更新签到设置
   const updateCheckInSettings = (updates: Partial<CheckInSettings>) => {
     const newSettings = { ...checkInSettings, ...updates };
     setCheckInSettings(newSettings);
     saveCheckInSettings(newSettings);
   };
 
-  // 清除签到记录
   const handleClearCheckInRecords = async () => {
-    const confirmed = await showConfirm('确定要清除所有签到记录吗？此操作不可恢复。');
+    // 增加二次确认避免误操作
+    const confirmed = await showConfirm(
+      selectedProjectId 
+        ? '确定要清除当前项目的所有云端及本地签到记录吗？此操作不可恢复。' 
+        : '确定要清除所有本地签到记录吗？此操作不可恢复。'
+    );
+    
     if (confirmed) {
-      clearCheckInRecords();
-      loadCheckInData();
-      showSuccess('签到记录已清除');
+      setLoadingProjects(true); // 使用 loading 状态
+      try {
+        if (selectedProjectId) {
+          // 清除云端数据
+          const { clearCheckInRecordsForEvent } = await import('../utils/supabaseCheckin');
+          const success = await clearCheckInRecordsForEvent(selectedProjectId);
+          
+          if (success) {
+            // 清除本地缓存
+            clearCheckInRecords();
+            loadCheckInData();
+            setCheckInStats(prev => ({ ...prev, checkedInCount: 0, checkInPercentage: 0 }));
+            showSuccess('已清除当前项目的云端及本地签到记录');
+          } else {
+            showError('云端记录清除失败，请重试');
+          }
+        } else {
+          // 仅清除本地
+          clearCheckInRecords();
+          loadCheckInData();
+          showSuccess('本地签到记录已清除');
+        }
+      } catch (err) {
+        console.error('清除记录失败:', err);
+        showError('清除记录时发生错误');
+      } finally {
+        setLoadingProjects(false);
+      }
     }
   };
 
@@ -186,7 +531,152 @@ const SettingsPanel = ({
         onClick={onClose}
       />
       
-      {/* 面板 */}
+      {/* 左侧项目管理面板 */}
+      <div className="relative w-64 h-full bg-[#0a0820]/95 backdrop-blur-xl border-r border-white/10 flex flex-col animate-slide-in-left z-10">
+        <div className="p-4 border-b border-white/10">
+          <div className="flex items-center gap-2 text-white font-bold text-lg">
+            <FolderOpen size={20} className="text-[#b63cfa]" />
+            项目管理
+          </div>
+        </div>
+        
+        {/* 项目列表 */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {loadingProjects ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 size={24} className="animate-spin text-gray-400" />
+            </div>
+          ) : !currentUser ? (
+             // 未登录状态
+            <div className="flex flex-col items-center justify-center py-10 px-4 space-y-4 text-center">
+              <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center">
+                <LogIn size={20} className="text-gray-400 ml-1" />
+              </div>
+              <div>
+                <p className="text-gray-300 font-medium mb-1">登录管理项目</p>
+                <p className="text-xs text-gray-500">登录后可创建和同步云端项目</p>
+              </div>
+              <button
+                onClick={() => navigate('/login')}
+                className="w-full py-2 bg-[#3c80fa] hover:bg-[#3c80fa]/80 text-white rounded-lg text-sm font-bold transition-all"
+              >
+                立即登录
+              </button>
+            </div>
+          ) : projects.length === 0 ? (
+            <div className="text-center py-8 text-gray-500 text-sm">
+              暂无项目，请创建一个
+            </div>
+          ) : (
+            projects.map(project => (
+              <div
+                key={project.id}
+                className={`group relative p-3 rounded-xl cursor-pointer transition-all ${
+                  selectedProjectId === project.id
+                    ? 'bg-gradient-to-r from-[#3c80fa]/20 to-[#b63cfa]/20 border border-[#3c80fa]/50'
+                    : 'bg-white/5 hover:bg-white/10 border border-transparent'
+                }`}
+                onClick={() => handleSelectProject(project.id)}
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`font-medium truncate ${
+                    selectedProjectId === project.id ? 'text-white' : 'text-gray-300'
+                  }`}>
+                    {project.name}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteProject(project.id);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded transition-all"
+                  >
+                    <Trash2 size={14} className="text-red-400" />
+                  </button>
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  {new Date(project.created_at).toLocaleDateString('zh-CN')}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+        
+
+        
+        {/* 新建项目 & 用户信息 - 仅登录可见 */}
+        {currentUser && (
+          <div className="p-3 border-t border-white/10 flex flex-col gap-3">
+            {showNewProjectInput ? (
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  placeholder="项目名称"
+                  className="w-full px-3 py-2 bg-black/40 border border-white/20 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-[#3c80fa]"
+                  autoFocus
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowNewProjectInput(false)}
+                    className="flex-1 py-2 text-sm text-gray-400 hover:text-white bg-white/5 rounded-lg"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={handleCreateProject}
+                    disabled={creatingProject}
+                    className="flex-1 py-2 text-sm text-white bg-[#3c80fa] hover:bg-[#3c80fa]/80 rounded-lg disabled:opacity-50"
+                  >
+                    {creatingProject ? '创建中...' : '创建'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowNewProjectInput(true)}
+                className="w-full py-2.5 border-2 border-dashed border-white/20 text-gray-400 text-sm rounded-xl hover:border-[#3c80fa] hover:text-[#3c80fa] transition-colors flex items-center justify-center gap-2"
+              >
+                <Plus size={16} />
+                新建项目
+              </button>
+            )}
+
+            {/* 用户信息 & 退出 */}
+            <div className="flex items-center justify-between px-1 pt-2 border-t border-white/5">
+              <div className="flex items-center gap-2 overflow-hidden">
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-[10px] font-bold text-white shrink-0">
+                  {currentUser.email?.charAt(0).toUpperCase()}
+                </div>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs text-white font-medium truncate max-w-[100px]">{currentUser.user_metadata?.name || currentUser.email?.split('@')[0]}</span>
+                </div>
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await supabase.auth.signOut();
+                    setCurrentUser(null);
+                    setProjects([]);
+                    setSelectedProjectId(null);
+                    showSuccess('已退出登录');
+                  } catch (e) {
+                    console.error('Logout error', e);
+                  }
+                }}
+                className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"
+                title="退出登录"
+              >
+                <LogIn size={16} className="rotate-180" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+      
+      {/* 右侧设置面板 */}
       <div className="relative ml-auto w-full max-w-md h-full bg-[#0f0c29]/95 backdrop-blur-xl border-l border-white/10 shadow-2xl flex flex-col animate-slide-in-right">
         {/* 头部 */}
         <div className="flex items-center justify-between p-4 border-b border-white/10">
@@ -207,6 +697,16 @@ const SettingsPanel = ({
             </button>
           </div>
         </div>
+
+        {/* 当前项目提示 */}
+        {selectedProjectId && (
+          <div className="px-4 py-2 bg-[#3c80fa]/10 border-b border-[#3c80fa]/20">
+            <span className="text-xs text-gray-400">当前项目：</span>
+            <span className="text-sm text-white ml-1 font-medium">
+              {projects.find(p => p.id === selectedProjectId)?.name || '未知'}
+            </span>
+          </div>
+        )}
 
         {/* Tab 导航 */}
         <div className="flex border-b border-white/10">
@@ -233,17 +733,139 @@ const SettingsPanel = ({
           {/* 导入名单 */}
           {activeTab === 'import' && (
             <div className="space-y-4">
-              
               {!previewFile ? (
-                // 状态 A: 初始选择文件界面
                 <>
                   <div className="p-4 bg-white/5 rounded-xl border border-white/10">
-                    <div className="flex items-center gap-2 mb-3">
-                      <FileSpreadsheet size={20} className="text-[#3c80fa]" />
-                      <span className="font-medium text-white">当前名单</span>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <FileSpreadsheet size={20} className="text-[#3c80fa]" />
+                        <span className="font-medium text-white">当前名单</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setShowParticipantsList(!showParticipantsList)}
+                          className="p-1.5 hover:bg-white/10 rounded-lg transition-colors text-gray-400 hover:text-white"
+                          title="查看名单"
+                        >
+                          <Eye size={16} />
+                        </button>
+                        <button
+                          onClick={() => setShowAddMemberForm(!showAddMemberForm)}
+                          className="p-1.5 hover:bg-[#3c80fa]/20 rounded-lg transition-colors text-[#3c80fa]"
+                          title="添加成员"
+                        >
+                          <UserPlus size={16} />
+                        </button>
+                      </div>
                     </div>
                     <p className="text-2xl font-bold text-white mb-1">{participants.length} <span className="text-sm font-normal text-gray-400">人</span></p>
                     <p className="text-xs text-gray-500">支持 .xlsx, .xls 格式</p>
+                    
+                    {/* 添加成员表单 */}
+                    {showAddMemberForm && (
+                      <div className="mt-4 pt-4 border-t border-white/10 space-y-3 animate-fade-in">
+                        <div className="flex items-center gap-2 text-sm text-white font-medium">
+                          <UserPlus size={14} className="text-[#3c80fa]" />
+                          添加成员
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            value={newMember.name}
+                            onChange={(e) => setNewMember({ ...newMember, name: e.target.value })}
+                            placeholder="姓名 *"
+                            className="px-3 py-2 bg-black/40 border border-white/20 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-[#3c80fa]"
+                          />
+                          <input
+                            type="text"
+                            value={newMember.id}
+                            onChange={(e) => setNewMember({ ...newMember, id: e.target.value })}
+                            placeholder="工号 (选填)"
+                            className="px-3 py-2 bg-black/40 border border-white/20 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-[#3c80fa]"
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          value={newMember.dept}
+                          onChange={(e) => setNewMember({ ...newMember, dept: e.target.value })}
+                          placeholder="部门 (选填)"
+                          className="w-full px-3 py-2 bg-black/40 border border-white/20 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-[#3c80fa]"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              setShowAddMemberForm(false);
+                              setNewMember({ id: '', name: '', dept: '' });
+                            }}
+                            className="flex-1 py-2 text-sm text-gray-400 hover:text-white bg-white/5 rounded-lg transition-colors"
+                          >
+                            取消
+                          </button>
+                          <button
+                            onClick={handleAddMember}
+                            className="flex-1 py-2 text-sm text-white bg-[#3c80fa] hover:bg-[#3c80fa]/80 rounded-lg transition-colors font-medium"
+                          >
+                            添加
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* 名单列表 */}
+                    {showParticipantsList && (
+                      <div className="mt-4 pt-4 border-t border-white/10 animate-fade-in">
+                        <div className="flex items-center gap-2 mb-3">
+                          <div className="relative flex-1">
+                            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                            <input
+                              type="text"
+                              value={participantsSearchQuery}
+                              onChange={(e) => setParticipantsSearchQuery(e.target.value)}
+                              placeholder="搜索姓名、工号或部门..."
+                              className="w-full pl-9 pr-3 py-2 bg-black/40 border border-white/20 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-[#3c80fa]"
+                            />
+                          </div>
+                        </div>
+                        
+                        <div className="max-h-80 overflow-y-auto space-y-1 custom-scrollbar">
+                          {filteredParticipants.length === 0 ? (
+                            <div className="text-center py-6 text-gray-500 text-sm">
+                              {participantsSearchQuery ? '未找到匹配的成员' : '暂无成员'}
+                            </div>
+                          ) : (
+                            filteredParticipants.map((p, idx) => (
+                              <div
+                                key={p.id}
+                                className="flex items-center justify-between px-3 py-2 bg-black/20 hover:bg-white/5 rounded-lg group transition-colors"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <span className="text-xs text-gray-600 w-6 shrink-0">{idx + 1}</span>
+                                  <div className="min-w-0">
+                                    <div className="text-sm text-white truncate">{p.name}</div>
+                                    <div className="text-xs text-gray-500 truncate">
+                                      {p.id} · {p.dept}
+                                    </div>
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => handleDeleteMember(p.id)}
+                                  className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 rounded transition-all"
+                                >
+                                  <Trash2 size={12} className="text-red-400" />
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                        {filteredParticipants.length > 0 && (
+                          <div className="text-center pt-2 text-xs text-gray-500 border-t border-white/5 mt-2">
+                            {participantsSearchQuery 
+                              ? `搜索结果：${filteredParticipants.length} 人` 
+                              : `共 ${filteredParticipants.length} 人`}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <input
@@ -285,14 +907,12 @@ const SettingsPanel = ({
                   </div>
                 </>
               ) : (
-                // 状态 B: 预览与映射界面
                 <div className="animate-fade-in space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-white font-bold">导入设置</h3>
                     <button onClick={cancelPreview} className="text-xs text-gray-400 hover:text-white">取消</button>
                   </div>
 
-                  {/* 映射选择器 */}
                   <div className="grid gap-3 bg-white/5 p-4 rounded-xl border border-white/10">
                     <div className="space-y-1">
                       <label className="text-xs text-gray-400">选择姓名列 (必选)</label>
@@ -332,7 +952,6 @@ const SettingsPanel = ({
                     </div>
                   </div>
 
-                  {/* 数据预览表格 */}
                   <div className="space-y-2">
                     <p className="text-xs text-gray-500">前 5 行数据预览：</p>
                     <div className="overflow-x-auto rounded-lg border border-white/10">
@@ -363,7 +982,6 @@ const SettingsPanel = ({
                     </div>
                   </div>
 
-                  {/* 底部按钮 */}
                   <div className="pt-2 flex gap-3">
                     <button
                       onClick={cancelPreview}
@@ -393,7 +1011,6 @@ const SettingsPanel = ({
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 space-y-2">
-                      {/* Name Input */}
                       <div className="flex items-center gap-2">
                         <div className="w-6 h-6 shrink-0 rounded-full bg-gradient-to-br from-[#b63cfa] to-[#573cfa] flex items-center justify-center text-xs font-bold text-white">
                           {idx + 1}
@@ -407,7 +1024,6 @@ const SettingsPanel = ({
                         />
                       </div>
                       
-                      {/* Description Input */}
                       <input
                         type="text"
                         value={prize.description || ''}
@@ -416,7 +1032,6 @@ const SettingsPanel = ({
                         placeholder="奖品描述 (如: Macbook Pro)"
                       />
 
-                      {/* Image Upload */}
                       <div className="flex items-center gap-2 ml-8">
                          <div 
                            className="relative w-10 h-10 rounded bg-black/40 overflow-hidden shrink-0 border border-white/10 group cursor-pointer"
@@ -564,7 +1179,6 @@ const SettingsPanel = ({
           {/* 签到设置 */}
           {activeTab === 'checkin' && (
             <div className="space-y-4">
-              {/* 签到大屏入口 - 高亮展示 */}
               {onOpenCheckInDisplay && (
                 <button
                   onClick={() => {
@@ -586,7 +1200,6 @@ const SettingsPanel = ({
                 </button>
               )}
 
-              {/* 签到统计 */}
               <div className="p-4 bg-white/5 rounded-xl border border-white/10">
                 <div className="flex items-center gap-2 mb-3">
                   <QrCode size={18} className="text-green-400" />
@@ -614,7 +1227,6 @@ const SettingsPanel = ({
                 </button>
               </div>
 
-              {/* 活动名称 */}
               <div className="p-4 bg-white/5 rounded-xl border border-white/10 space-y-3">
                 <div className="flex items-center gap-2">
                   <Sparkles size={16} className="text-yellow-400" />
@@ -641,7 +1253,6 @@ const SettingsPanel = ({
                 </div>
               </div>
 
-              {/* 位置设置 */}
               <div className="p-4 bg-white/5 rounded-xl border border-white/10 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -713,14 +1324,12 @@ const SettingsPanel = ({
                 )}
               </div>
 
-              {/* 大屏配置 */}
               <div className="p-4 bg-white/5 rounded-xl border border-white/10 space-y-3">
                 <div className="flex items-center gap-2">
                   <Settings2 size={16} className="text-purple-400" />
                   <span className="font-medium text-white text-sm">大屏配置</span>
                 </div>
                 
-                {/* 显示二维码 */}
                 <div className="flex items-center justify-between py-2">
                   <span className="text-sm text-gray-400">显示签到二维码</span>
                   <button
@@ -735,7 +1344,6 @@ const SettingsPanel = ({
                   </button>
                 </div>
 
-                {/* 显示部门统计 */}
                 <div className="flex items-center justify-between py-2 border-t border-white/5">
                   <span className="text-sm text-gray-400">显示部门统计</span>
                   <button
@@ -750,7 +1358,6 @@ const SettingsPanel = ({
                   </button>
                 </div>
 
-                {/* 动画风格 */}
                 <div className="pt-2 border-t border-white/5">
                   <label className="block text-xs text-gray-400 mb-2">动画风格</label>
                   <div className="grid grid-cols-3 gap-2">
@@ -771,7 +1378,6 @@ const SettingsPanel = ({
                 </div>
               </div>
 
-              {/* 数据操作 */}
               <div className="border-t border-white/10 pt-4">
                 <button
                   onClick={handleClearCheckInRecords}
@@ -841,6 +1447,15 @@ const SettingsPanel = ({
                   onClick={async () => {
                     const confirmed = await showConfirm('确定要清除所有数据吗？此操作不可恢复！');
                     if (confirmed) {
+                      try {
+                        if (selectedProjectId) {
+                          const { clearCheckInRecordsForEvent } = await import('../utils/supabaseCheckin');
+                          await clearCheckInRecordsForEvent(selectedProjectId);
+                          setCheckInStats(prev => ({ ...prev, checkedInCount: 0, checkInPercentage: 0 }));
+                        }
+                      } catch (e) {
+                         console.error('Failed to clear cloud check-ins', e);
+                      }
                       onClearAll();
                     }
                   }}
@@ -858,30 +1473,24 @@ const SettingsPanel = ({
       {/* 重置确认弹窗 */}
       {showResetConfirm && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          {/* 遮罩 */}
           <div 
             className="absolute inset-0 bg-black/70 backdrop-blur-sm"
             onClick={() => setShowResetConfirm(false)}
           />
           
-          {/* 弹窗内容 */}
           <div className="relative bg-gradient-to-br from-[#1a1535] to-[#0f0c29] border border-white/10 rounded-2xl shadow-2xl max-w-sm w-full p-6 animate-fade-in">
-            {/* 警告图标 */}
             <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/20 flex items-center justify-center">
               <AlertCircle size={32} className="text-red-400" />
             </div>
             
-            {/* 标题 */}
             <h3 className="text-xl font-bold text-white text-center mb-2">
               确认重置所有数据？
             </h3>
             
-            {/* 描述 */}
             <p className="text-gray-400 text-sm text-center mb-6">
               此操作将清除以下所有数据，且<span className="text-red-400 font-medium">无法恢复</span>：
             </p>
             
-            {/* 数据列表 */}
             <div className="bg-black/30 rounded-xl p-4 mb-6 space-y-2">
               <div className="flex items-center gap-2 text-sm">
                 <div className="w-2 h-2 rounded-full bg-red-400"></div>
@@ -899,9 +1508,12 @@ const SettingsPanel = ({
                 <div className="w-2 h-2 rounded-full bg-red-400"></div>
                 <span className="text-gray-300">已中奖名单</span>
               </div>
+              <div className="flex items-center gap-2 text-sm">
+                <div className="w-2 h-2 rounded-full bg-green-400"></div>
+                <span className="text-green-300">☁️ 云端签到记录（{checkInStats.checkedInCount} 人）</span>
+              </div>
             </div>
             
-            {/* 按钮 */}
             <div className="flex gap-3">
               <button
                 onClick={() => setShowResetConfirm(false)}
@@ -910,9 +1522,47 @@ const SettingsPanel = ({
                 取消
               </button>
               <button
-                onClick={() => {
-                  onClearAll();
+                onClick={async () => {
+                  let cloudCleared = false;
+                  
+                  // 优先使用选中的项目，如果没有则尝试获取活跃活动
+                  let eventIdToClear = selectedProjectId;
+                  if (!eventIdToClear) {
+                    try {
+                      const activeEvent = await getActiveEvent();
+                      if (activeEvent) {
+                        eventIdToClear = activeEvent.id;
+                      }
+                    } catch (e) {
+                      console.error('获取活跃活动失败:', e);
+                    }
+                  }
+                  
+                  if (eventIdToClear) {
+                    try {
+                      // 重置时同时清除云端签到数据
+                      const success = await clearCheckInRecordsForEvent(eventIdToClear);
+                      if (success) {
+                        cloudCleared = true;
+                        setCheckInStats(prev => ({ ...prev, checkedInCount: 0, checkInPercentage: 0 }));
+                        console.log('✅ 云端签到记录已清除，活动ID:', eventIdToClear);
+                      } else {
+                        console.error('❌ 云端签到记录清除失败');
+                      }
+                    } catch (e) {
+                      console.error('Failed to clear cloud check-ins:', e);
+                    }
+                  } else {
+                    console.warn('⚠️ 没有找到可清除的活动ID');
+                  }
+                  
+                  onClearAll(); // 清除本地数据
                   setShowResetConfirm(false);
+                  
+                  if (cloudCleared) {
+                    showSuccess('已重置所有数据，包括云端签到记录');
+                  }
+                  
                   onClose();
                 }}
                 className="flex-1 py-3 px-4 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl transition-colors shadow-lg shadow-red-500/20"
