@@ -25,8 +25,6 @@ const LotteryPageWrapper = () => {
  */
 const DisplayPageWrapper = () => {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const eventId = searchParams.get('event');
   
   return (
     <CheckInDisplayPage 
