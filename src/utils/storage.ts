@@ -64,10 +64,17 @@ export const loadBackgroundMusicSettings = (): BackgroundMusicSettings => {
     return DEFAULT_BACKGROUND_MUSIC;
   }
   const parsed = JSON.parse(data) as Partial<BackgroundMusicSettings>;
-  return {
+  const merged = {
     ...DEFAULT_BACKGROUND_MUSIC,
     ...parsed,
   };
+  if (!merged.presetId && merged.src) {
+    return { ...merged, presetId: 'custom' };
+  }
+  if (!merged.presetId || (merged.presetId !== 'default' && merged.presetId !== 'custom')) {
+    return DEFAULT_BACKGROUND_MUSIC;
+  }
+  return merged;
 };
 
 // 清除所有数据

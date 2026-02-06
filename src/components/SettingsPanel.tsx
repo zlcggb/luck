@@ -54,21 +54,6 @@ const MUSIC_PRESETS = [
     name: '默认抽奖音乐',
     src: 'https://file.unilumin-gtm.com/719dd328-3fee-4364-80a7-fb7a2a4e2881/1770371983248-%E6%8A%BD%E5%A5%96%E9%9F%B3%E4%B9%90.mp3',
   },
-  {
-    id: 'focus',
-    name: '专注氛围',
-    src: 'https://cdn.pixabay.com/download/audio/2021/10/25/audio_63b9d2b6cc.mp3?filename=ambient-piano-11263.mp3',
-  },
-  {
-    id: 'celebrate',
-    name: '轻快庆祝',
-    src: 'https://cdn.pixabay.com/download/audio/2022/03/15/audio_8c08f63c2f.mp3?filename=happy-days-10927.mp3',
-  },
-  {
-    id: 'future',
-    name: '未来感',
-    src: 'https://cdn.pixabay.com/download/audio/2021/08/04/audio_0621a0b9d0.mp3?filename=cyber-technology-11288.mp3',
-  },
 ];
 
 const SettingsPanel = ({
@@ -971,14 +956,7 @@ const SettingsPanel = ({
                         <Sparkles size={18} className="text-[#b63cfa]" />
                         <span className="font-medium text-white">背景音乐</span>
                       </div>
-                      {backgroundMusic.src && (
-                        <button
-                          onClick={handleBackgroundMusicClear}
-                          className="text-xs text-red-400 hover:text-red-300"
-                        >
-                          移除
-                        </button>
-                      )}
+                      
                     </div>
                     <p className="text-xs text-gray-500">
                       支持预设音乐或自定义上传，手动点击播放按钮即可循环播放。
@@ -990,7 +968,6 @@ const SettingsPanel = ({
                         onChange={(e) => handleBackgroundMusicPresetChange(e.target.value)}
                         className="w-full bg-black/40 border border-white/20 rounded px-2 py-2 text-white text-sm focus:border-[#3c80fa] outline-none"
                       >
-                        <option value="">无背景音乐</option>
                         {MUSIC_PRESETS.map(preset => (
                           <option key={preset.id} value={preset.id}>
                             {preset.name}
