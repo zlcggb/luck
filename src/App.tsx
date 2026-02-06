@@ -56,6 +56,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
   
   // UI 状态
   const [isRolling, setIsRolling] = useState(false);
+  const [isMusicPlaying, setIsMusicPlaying] = useState(false);
   const [currentDisplay, setCurrentDisplay] = useState<Participant[]>([]);
   const [showConfetti, setShowConfetti] = useState(false);
   const [hasDrawn, setHasDrawn] = useState(false);
@@ -288,9 +289,6 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
 
     setIsRolling(true);
     setShowConfetti(false);
-    if (backgroundMusic.autoPlayOnDraw && backgroundMusic.src && audioRef.current?.paused) {
-      audioRef.current.play().catch(() => null);
-    }
 
     timerRef.current = setInterval(() => {
       const batch = getRandomBatch(availableParticipants, batchSize);
@@ -373,6 +371,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
+      setIsMusicPlaying(false);
     }
   };
 
@@ -386,7 +385,15 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden font-sans text-white selection:bg-pink-500 selection:text-white">
-      <audio ref={audioRef} src={backgroundMusic.src || undefined} loop preload="auto" className="hidden" />
+      <audio
+        ref={audioRef}
+        src={backgroundMusic.src || undefined}
+        loop
+        preload="auto"
+        className="hidden"
+        onPlay={() => setIsMusicPlaying(true)}
+        onPause={() => setIsMusicPlaying(false)}
+      />
       
       {/* --- 背景层 --- */}
       <div className="absolute inset-0 z-0 bg-[#0b0a1a]">
@@ -1161,6 +1168,15 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
         onOpenCheckInDisplay={onOpenCheckInDisplay}
         backgroundMusic={backgroundMusic}
         onBackgroundMusicChange={setBackgroundMusic}
+        isMusicPlaying={isMusicPlaying}
+        onToggleMusic={() => {
+          if (!audioRef.current || !backgroundMusic.src) return;
+          if (audioRef.current.paused) {
+            audioRef.current.play().catch(() => null);
+          } else {
+            audioRef.current.pause();
+          }
+        }}
       />
     </div>
   );

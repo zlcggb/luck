@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -45,6 +45,8 @@ const ProjectSettingsPage = () => {
   const [prizes, setPrizes] = useState<Prize[]>([]);
   const [records, setRecords] = useState<DrawRecord[]>([]);
   const [backgroundMusic, setBackgroundMusic] = useState<BackgroundMusicSettings>(DEFAULT_BACKGROUND_MUSIC);
+  const [isMusicPlaying, setIsMusicPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // 初始化
   useEffect(() => {
@@ -60,6 +62,15 @@ const ProjectSettingsPage = () => {
   useEffect(() => {
     saveBackgroundMusicSettings(backgroundMusic);
   }, [backgroundMusic]);
+
+  useEffect(() => {
+    if (backgroundMusic.src) return;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      setIsMusicPlaying(false);
+    }
+  }, [backgroundMusic.src]);
 
   // 加载项目数据
   const loadProject = async () => {
@@ -249,6 +260,15 @@ const ProjectSettingsPage = () => {
 
   return (
     <div className="min-h-screen bg-[#0b0a1a] text-white">
+      <audio
+        ref={audioRef}
+        src={backgroundMusic.src || undefined}
+        loop
+        preload="auto"
+        className="hidden"
+        onPlay={() => setIsMusicPlaying(true)}
+        onPause={() => setIsMusicPlaying(false)}
+      />
       {/* 背景 */}
       <div className="fixed inset-0 z-0">
         <div className="absolute top-[-20%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-blue-600/20 filter blur-[120px]" />
@@ -400,6 +420,15 @@ const ProjectSettingsPage = () => {
         onEventChange={(newEventId) => navigate(`/project/${newEventId}`)}
         backgroundMusic={backgroundMusic}
         onBackgroundMusicChange={setBackgroundMusic}
+        isMusicPlaying={isMusicPlaying}
+        onToggleMusic={() => {
+          if (!audioRef.current || !backgroundMusic.src) return;
+          if (audioRef.current.paused) {
+            audioRef.current.play().catch(() => null);
+          } else {
+            audioRef.current.pause();
+          }
+        }}
       />
     </div>
   );

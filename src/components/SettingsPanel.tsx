@@ -42,11 +42,18 @@ interface SettingsPanelProps {
   onEventChange?: (eventId: string) => void;
   backgroundMusic: BackgroundMusicSettings;
   onBackgroundMusicChange: (settings: BackgroundMusicSettings) => void;
+  isMusicPlaying: boolean;
+  onToggleMusic: () => void;
 }
 
 type TabType = 'import' | 'prizes' | 'history' | 'export' | 'checkin';
 
 const MUSIC_PRESETS = [
+  {
+    id: 'default',
+    name: '默认抽奖音乐',
+    src: 'https://file.unilumin-gtm.com/719dd328-3fee-4364-80a7-fb7a2a4e2881/1770371983248-%E6%8A%BD%E5%A5%96%E9%9F%B3%E4%B9%90.mp3',
+  },
   {
     id: 'focus',
     name: '专注氛围',
@@ -80,6 +87,8 @@ const SettingsPanel = ({
   onEventChange,
   backgroundMusic,
   onBackgroundMusicChange,
+  isMusicPlaying,
+  onToggleMusic,
 }: SettingsPanelProps) => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('import');
@@ -972,7 +981,7 @@ const SettingsPanel = ({
                       )}
                     </div>
                     <p className="text-xs text-gray-500">
-                      上传后可在抽奖开始时自动播放，支持常驻循环播放。
+                      支持预设音乐或自定义上传，手动点击播放按钮即可循环播放。
                     </p>
                     <div className="space-y-2">
                       <label className="text-xs text-gray-400">预设音乐</label>
@@ -1010,18 +1019,13 @@ const SettingsPanel = ({
                         当前文件：{backgroundMusic.name}
                       </div>
                     )}
-                    <label className="flex items-center gap-2 text-xs text-gray-300">
-                      <input
-                        type="checkbox"
-                        checked={backgroundMusic.autoPlayOnDraw}
-                        onChange={(e) => onBackgroundMusicChange({
-                          ...backgroundMusic,
-                          autoPlayOnDraw: e.target.checked,
-                        })}
-                        className="accent-[#3c80fa]"
-                      />
-                      抽奖开始时自动播放
-                    </label>
+                    <button
+                      onClick={onToggleMusic}
+                      disabled={!backgroundMusic.src}
+                      className="w-full py-2 px-3 rounded-lg text-sm font-medium transition-colors border border-white/10 bg-white/10 hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isMusicPlaying ? '暂停播放' : '播放音乐'}
+                    </button>
                   </div>
 
                   <input

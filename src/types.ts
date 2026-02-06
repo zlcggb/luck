@@ -28,7 +28,6 @@ export interface DrawRecord {
 export interface BackgroundMusicSettings {
   src: string;
   name: string;
-  autoPlayOnDraw: boolean;
   presetId: string;
 }
 
@@ -41,10 +40,9 @@ export interface LotteryState {
 }
 
 export const DEFAULT_BACKGROUND_MUSIC: BackgroundMusicSettings = {
-  src: '',
-  name: '',
-  autoPlayOnDraw: true,
-  presetId: '',
+  src: 'https://file.unilumin-gtm.com/719dd328-3fee-4364-80a7-fb7a2a4e2881/1770371983248-%E6%8A%BD%E5%A5%96%E9%9F%B3%E4%B9%90.mp3',
+  name: '默认抽奖音乐',
+  presetId: 'default',
 };
 
 // 默认奖项配置
