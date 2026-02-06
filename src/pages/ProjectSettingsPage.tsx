@@ -17,9 +17,17 @@ import {
   updatePrize as updatePrizeApi,
   deletePrize as deletePrizeApi
 } from '../utils/supabaseCheckin';
-import { Participant, Prize, DrawRecord } from '../types';
+import { Participant, Prize, DrawRecord, BackgroundMusicSettings, DEFAULT_BACKGROUND_MUSIC } from '../types';
 import SettingsPanel from '../components/SettingsPanel';
-import { saveParticipants, savePrizes, loadPrizes, saveRecords, loadRecords } from '../utils/storage';
+import {
+  saveParticipants,
+  savePrizes,
+  loadPrizes,
+  saveRecords,
+  loadRecords,
+  loadBackgroundMusicSettings,
+  saveBackgroundMusicSettings,
+} from '../utils/storage';
 
 /**
  * 项目设置页面 - 嵌入原有设置面板
@@ -36,6 +44,7 @@ const ProjectSettingsPage = () => {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [prizes, setPrizes] = useState<Prize[]>([]);
   const [records, setRecords] = useState<DrawRecord[]>([]);
+  const [backgroundMusic, setBackgroundMusic] = useState<BackgroundMusicSettings>(DEFAULT_BACKGROUND_MUSIC);
 
   // 初始化
   useEffect(() => {
@@ -43,6 +52,14 @@ const ProjectSettingsPage = () => {
       loadProject();
     }
   }, [projectId]);
+
+  useEffect(() => {
+    setBackgroundMusic(loadBackgroundMusicSettings());
+  }, []);
+
+  useEffect(() => {
+    saveBackgroundMusicSettings(backgroundMusic);
+  }, [backgroundMusic]);
 
   // 加载项目数据
   const loadProject = async () => {
@@ -381,6 +398,8 @@ const ProjectSettingsPage = () => {
         onOpenCheckInDisplay={() => navigate(`/display?event=${projectId}`)}
         currentEventId={projectId}
         onEventChange={(newEventId) => navigate(`/project/${newEventId}`)}
+        backgroundMusic={backgroundMusic}
+        onBackgroundMusicChange={setBackgroundMusic}
       />
     </div>
   );
