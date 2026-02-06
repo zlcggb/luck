@@ -25,6 +25,12 @@ export interface DrawRecord {
   winners: Participant[]; // 中奖者列表
 }
 
+export interface BackgroundMusicSettings {
+  src: string;
+  name: string;
+  presetId: string;
+}
+
 // 完整的抽奖数据状态
 export interface LotteryState {
   participants: Participant[];  // 所有参与者
@@ -32,6 +38,12 @@ export interface LotteryState {
   records: DrawRecord[];        // 抽奖历史记录
   excludedIds: Set<string>;     // 已中奖的工号集合
 }
+
+export const DEFAULT_BACKGROUND_MUSIC: BackgroundMusicSettings = {
+  src: 'https://file.unilumin-gtm.com/719dd328-3fee-4364-80a7-fb7a2a4e2881/1770371983248-%E6%8A%BD%E5%A5%96%E9%9F%B3%E4%B9%90.mp3',
+  name: '默认抽奖音乐',
+  presetId: 'default',
+};
 
 // 默认奖项配置
 export const DEFAULT_PRIZES: Prize[] = [
@@ -47,4 +59,5 @@ export const STORAGE_KEYS = {
   PRIZES: 'lottery_prizes',
   RECORDS: 'lottery_records',
   EXCLUDED_IDS: 'lottery_excluded_ids',
+  BACKGROUND_MUSIC: 'lottery_background_music',
 };
