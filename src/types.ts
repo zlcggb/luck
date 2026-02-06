@@ -25,6 +25,13 @@ export interface DrawRecord {
   winners: Participant[]; // 中奖者列表
 }
 
+export interface BackgroundMusicSettings {
+  src: string;
+  name: string;
+  autoPlayOnDraw: boolean;
+  presetId: string;
+}
+
 // 完整的抽奖数据状态
 export interface LotteryState {
   participants: Participant[];  // 所有参与者
@@ -32,6 +39,13 @@ export interface LotteryState {
   records: DrawRecord[];        // 抽奖历史记录
   excludedIds: Set<string>;     // 已中奖的工号集合
 }
+
+export const DEFAULT_BACKGROUND_MUSIC: BackgroundMusicSettings = {
+  src: '',
+  name: '',
+  autoPlayOnDraw: true,
+  presetId: '',
+};
 
 // 默认奖项配置
 export const DEFAULT_PRIZES: Prize[] = [
@@ -47,4 +61,5 @@ export const STORAGE_KEYS = {
   PRIZES: 'lottery_prizes',
   RECORDS: 'lottery_records',
   EXCLUDED_IDS: 'lottery_excluded_ids',
+  BACKGROUND_MUSIC: 'lottery_background_music',
 };

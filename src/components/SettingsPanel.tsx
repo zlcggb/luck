@@ -6,7 +6,7 @@ import {
   Sparkles, ChevronRight, Monitor, Settings2, FolderOpen, Loader2,
   LogIn, Search, UserPlus, Eye
 } from 'lucide-react';
-import { Participant, Prize, DrawRecord } from '../types';
+import { Participant, Prize, DrawRecord, BackgroundMusicSettings } from '../types';
 import { exportWinnersToExcel, downloadTemplate, parseExcelFile, processImportData } from '../utils/excel';
 import { CheckInSettings, DEFAULT_CHECKIN_SETTINGS } from '../types/checkin';
 import { saveCheckInSettings, loadCheckInSettings, clearCheckInRecords, calculateStats } from '../utils/checkinStorage';
@@ -40,9 +40,29 @@ interface SettingsPanelProps {
   onOpenCheckInDisplay?: () => void;
   currentEventId?: string;
   onEventChange?: (eventId: string) => void;
+  backgroundMusic: BackgroundMusicSettings;
+  onBackgroundMusicChange: (settings: BackgroundMusicSettings) => void;
 }
 
 type TabType = 'import' | 'prizes' | 'history' | 'export' | 'checkin';
+
+const MUSIC_PRESETS = [
+  {
+    id: 'focus',
+    name: '专注氛围',
+    src: 'https://cdn.pixabay.com/download/audio/2021/10/25/audio_63b9d2b6cc.mp3?filename=ambient-piano-11263.mp3',
+  },
+  {
+    id: 'celebrate',
+    name: '轻快庆祝',
+    src: 'https://cdn.pixabay.com/download/audio/2022/03/15/audio_8c08f63c2f.mp3?filename=happy-days-10927.mp3',
+  },
+  {
+    id: 'future',
+    name: '未来感',
+    src: 'https://cdn.pixabay.com/download/audio/2021/08/04/audio_0621a0b9d0.mp3?filename=cyber-technology-11288.mp3',
+  },
+];
 
 const SettingsPanel = ({
   isOpen,
@@ -58,6 +78,8 @@ const SettingsPanel = ({
   onOpenCheckInDisplay,
   currentEventId,
   onEventChange,
+  backgroundMusic,
+  onBackgroundMusicChange,
 }: SettingsPanelProps) => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('import');
@@ -85,6 +107,7 @@ const SettingsPanel = ({
   const [participantsSearchQuery, setParticipantsSearchQuery] = useState('');
   const [showAddMemberForm, setShowAddMemberForm] = useState(false);
   const [newMember, setNewMember] = useState({ id: '', name: '', dept: '' });
+  const backgroundMusicInputRef = useRef<HTMLInputElement>(null);
 
   // 活动状态
 
@@ -408,6 +431,66 @@ const SettingsPanel = ({
     // 重置表单
     setNewMember({ id: '', name: '', dept: '' });
     setShowAddMemberForm(false);
+  };
+
+  const handleBackgroundMusicUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('audio/')) {
+      showWarning('请选择音频文件');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      onBackgroundMusicChange({
+        ...backgroundMusic,
+        src: String(reader.result),
+        name: file.name,
+        presetId: 'custom',
+      });
+      if (backgroundMusicInputRef.current) {
+        backgroundMusicInputRef.current.value = '';
+      }
+      showSuccess('背景音乐已上传');
+    };
+    reader.onerror = () => {
+      showError('读取音频失败');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleBackgroundMusicClear = () => {
+    onBackgroundMusicChange({
+      ...backgroundMusic,
+      src: '',
+      name: '',
+      presetId: '',
+    });
+    if (backgroundMusicInputRef.current) {
+      backgroundMusicInputRef.current.value = '';
+    }
+  };
+
+  const handleBackgroundMusicPresetChange = (presetId: string) => {
+    if (!presetId) {
+      handleBackgroundMusicClear();
+      return;
+    }
+    if (presetId === 'custom') {
+      onBackgroundMusicChange({
+        ...backgroundMusic,
+        presetId: 'custom',
+      });
+      return;
+    }
+    const preset = MUSIC_PRESETS.find(item => item.id === presetId);
+    if (!preset) return;
+    onBackgroundMusicChange({
+      ...backgroundMusic,
+      src: preset.src,
+      name: preset.name,
+      presetId: preset.id,
+    });
   };
 
   const handleDeleteMember = async (memberId: string) => {
@@ -866,6 +949,74 @@ const SettingsPanel = ({
                         )}
                       </div>
                     )}
+                  </div>
+
+                  <div className="p-4 bg-white/5 rounded-xl border border-white/10 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Sparkles size={18} className="text-[#b63cfa]" />
+                        <span className="font-medium text-white">背景音乐</span>
+                      </div>
+                      {backgroundMusic.src && (
+                        <button
+                          onClick={handleBackgroundMusicClear}
+                          className="text-xs text-red-400 hover:text-red-300"
+                        >
+                          移除
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      上传后可在抽奖开始时自动播放，支持常驻循环播放。
+                    </p>
+                    <div className="space-y-2">
+                      <label className="text-xs text-gray-400">预设音乐</label>
+                      <select
+                        value={backgroundMusic.presetId}
+                        onChange={(e) => handleBackgroundMusicPresetChange(e.target.value)}
+                        className="w-full bg-black/40 border border-white/20 rounded px-2 py-2 text-white text-sm focus:border-[#3c80fa] outline-none"
+                      >
+                        <option value="">无背景音乐</option>
+                        {MUSIC_PRESETS.map(preset => (
+                          <option key={preset.id} value={preset.id}>
+                            {preset.name}
+                          </option>
+                        ))}
+                        <option value="custom">自定义上传</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        ref={backgroundMusicInputRef}
+                        type="file"
+                        accept="audio/*"
+                        onChange={handleBackgroundMusicUpload}
+                        className="hidden"
+                      />
+                      <button
+                        onClick={() => backgroundMusicInputRef.current?.click()}
+                        className="flex-1 py-2 px-3 bg-white/10 hover:bg-white/20 text-gray-200 rounded-lg text-sm transition-colors"
+                      >
+                        {backgroundMusic.src ? '更换音频' : '上传音频'}
+                      </button>
+                    </div>
+                    {backgroundMusic.name && (
+                      <div className="text-xs text-gray-400 truncate">
+                        当前文件：{backgroundMusic.name}
+                      </div>
+                    )}
+                    <label className="flex items-center gap-2 text-xs text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={backgroundMusic.autoPlayOnDraw}
+                        onChange={(e) => onBackgroundMusicChange({
+                          ...backgroundMusic,
+                          autoPlayOnDraw: e.target.checked,
+                        })}
+                        className="accent-[#3c80fa]"
+                      />
+                      抽奖开始时自动播放
+                    </label>
                   </div>
 
                   <input

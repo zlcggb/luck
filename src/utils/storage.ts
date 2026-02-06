@@ -1,4 +1,12 @@
-import { Participant, Prize, DrawRecord, STORAGE_KEYS, DEFAULT_PRIZES } from '../types';
+import {
+  Participant,
+  Prize,
+  DrawRecord,
+  STORAGE_KEYS,
+  DEFAULT_PRIZES,
+  BackgroundMusicSettings,
+  DEFAULT_BACKGROUND_MUSIC,
+} from '../types';
 
 // 保存参与者列表
 export const saveParticipants = (participants: Participant[]) => {
@@ -42,6 +50,24 @@ export const saveExcludedIds = (ids: Set<string>) => {
 export const loadExcludedIds = (): Set<string> => {
   const data = localStorage.getItem(STORAGE_KEYS.EXCLUDED_IDS);
   return data ? new Set(JSON.parse(data)) : new Set();
+};
+
+// 保存背景音乐配置
+export const saveBackgroundMusicSettings = (settings: BackgroundMusicSettings) => {
+  localStorage.setItem(STORAGE_KEYS.BACKGROUND_MUSIC, JSON.stringify(settings));
+};
+
+// 读取背景音乐配置
+export const loadBackgroundMusicSettings = (): BackgroundMusicSettings => {
+  const data = localStorage.getItem(STORAGE_KEYS.BACKGROUND_MUSIC);
+  if (!data) {
+    return DEFAULT_BACKGROUND_MUSIC;
+  }
+  const parsed = JSON.parse(data) as Partial<BackgroundMusicSettings>;
+  return {
+    ...DEFAULT_BACKGROUND_MUSIC,
+    ...parsed,
+  };
 };
 
 // 清除所有数据
