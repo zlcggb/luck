@@ -1,12 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
 import { Play, Square, Trophy, Grid, HelpCircle, Settings, Gift, ChevronRight, X } from 'lucide-react';
-import { Participant, Prize, DrawRecord, DEFAULT_PRIZES } from './types';
+import {
+  Participant,
+  Prize,
+  DrawRecord,
+  DEFAULT_PRIZES,
+  BackgroundMusicSettings,
+  DEFAULT_BACKGROUND_MUSIC,
+} from './types';
 import { 
   saveParticipants, loadParticipants, 
   savePrizes, loadPrizes, 
   saveRecords, loadRecords,
   saveExcludedIds, loadExcludedIds,
-  clearAllData
+  clearAllData,
+  saveBackgroundMusicSettings,
+  loadBackgroundMusicSettings,
 } from './utils/storage';
 import { 
   needsSpecialLayout, 
@@ -59,24 +68,28 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
   const [batchSize, setBatchSize] = useState(1);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // 使用内部弹窗
   const { showWarning, showConfirm } = useModal();
 
   // --- 初始化：从 LocalStorage 加载数据 ---
   const [isInitialized, setIsInitialized] = useState(false);
+  const [backgroundMusic, setBackgroundMusic] = useState<BackgroundMusicSettings>(DEFAULT_BACKGROUND_MUSIC);
   
   useEffect(() => {
     const savedParticipants = loadParticipants();
     const savedPrizes = loadPrizes();
     const savedRecords = loadRecords();
     const savedExcludedIds = loadExcludedIds();
+    const savedBackgroundMusic = loadBackgroundMusicSettings();
     
     // 如果没有保存的参与者，使用模拟数据
     setParticipants(savedParticipants.length > 0 ? savedParticipants : MOCK_PARTICIPANTS);
     setPrizes(savedPrizes);
     setRecords(savedRecords);
     setExcludedIds(savedExcludedIds);
+    setBackgroundMusic(savedBackgroundMusic);
     
     // 设置默认选中的奖项
     if (savedPrizes.length > 0) {
@@ -108,6 +121,19 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
     if (!isInitialized) return;
     saveExcludedIds(excludedIds);
   }, [excludedIds, isInitialized]);
+
+  useEffect(() => {
+    if (!isInitialized) return;
+    saveBackgroundMusicSettings(backgroundMusic);
+  }, [backgroundMusic, isInitialized]);
+
+  useEffect(() => {
+    if (backgroundMusic.src) return;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+  }, [backgroundMusic.src]);
 
   // --- 计算可用参与者（排除已中奖的） ---
   const availableParticipants = participants.filter(p => !excludedIds.has(p.id));
@@ -262,6 +288,9 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
 
     setIsRolling(true);
     setShowConfetti(false);
+    if (backgroundMusic.autoPlayOnDraw && backgroundMusic.src && audioRef.current?.paused) {
+      audioRef.current.play().catch(() => null);
+    }
 
     timerRef.current = setInterval(() => {
       const batch = getRandomBatch(availableParticipants, batchSize);
@@ -336,10 +365,15 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
     setPrizes(DEFAULT_PRIZES);
     setRecords([]);
     setExcludedIds(new Set());
+    setBackgroundMusic(DEFAULT_BACKGROUND_MUSIC);
     setCurrentDisplay([]);
     setShowConfetti(false);
     setHasDrawn(false);
     setCurrentPrizeId(DEFAULT_PRIZES[0].id);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
   };
 
 
@@ -352,6 +386,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden font-sans text-white selection:bg-pink-500 selection:text-white">
+      <audio ref={audioRef} src={backgroundMusic.src || undefined} loop preload="auto" className="hidden" />
       
       {/* --- 背景层 --- */}
       <div className="absolute inset-0 z-0 bg-[#0b0a1a]">
@@ -1124,6 +1159,8 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
         onUndoRecord={handleUndoRecord}
         onClearAll={handleClearAll}
         onOpenCheckInDisplay={onOpenCheckInDisplay}
+        backgroundMusic={backgroundMusic}
+        onBackgroundMusicChange={setBackgroundMusic}
       />
     </div>
   );
