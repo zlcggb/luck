@@ -6,7 +6,12 @@ import {
   DEFAULT_PRIZES,
   BackgroundMusicSettings,
   DEFAULT_BACKGROUND_MUSIC,
+  ThemeId,
+  ThemePalette,
+  AvatarThemeId,
 } from '../types';
+import { DEFAULT_CUSTOM_THEME, DEFAULT_THEME_ID, isThemeId } from '../theme';
+import { DEFAULT_AVATAR_THEME_ID, isAvatarThemeId } from '../avatarTheme';
 
 // 保存参与者列表
 export const saveParticipants = (participants: Participant[]) => {
@@ -75,6 +80,50 @@ export const loadBackgroundMusicSettings = (): BackgroundMusicSettings => {
     return DEFAULT_BACKGROUND_MUSIC;
   }
   return merged;
+};
+
+export const saveThemeId = (themeId: ThemeId) => {
+  localStorage.setItem(STORAGE_KEYS.THEME, themeId);
+};
+
+export const loadThemeId = (): ThemeId => {
+  const value = localStorage.getItem(STORAGE_KEYS.THEME);
+  if (!value || !isThemeId(value)) {
+    return DEFAULT_THEME_ID;
+  }
+  return value;
+};
+
+export const saveCustomThemePalette = (palette: ThemePalette) => {
+  localStorage.setItem(STORAGE_KEYS.THEME_CUSTOM, JSON.stringify(palette));
+};
+
+export const loadCustomThemePalette = (): ThemePalette => {
+  const value = localStorage.getItem(STORAGE_KEYS.THEME_CUSTOM);
+  if (!value) {
+    return DEFAULT_CUSTOM_THEME;
+  }
+  try {
+    const parsed = JSON.parse(value) as Partial<ThemePalette>;
+    return {
+      ...DEFAULT_CUSTOM_THEME,
+      ...parsed,
+    };
+  } catch {
+    return DEFAULT_CUSTOM_THEME;
+  }
+};
+
+export const saveAvatarThemeId = (avatarThemeId: AvatarThemeId) => {
+  localStorage.setItem(STORAGE_KEYS.AVATAR_THEME, avatarThemeId);
+};
+
+export const loadAvatarThemeId = (): AvatarThemeId => {
+  const value = localStorage.getItem(STORAGE_KEYS.AVATAR_THEME);
+  if (!value || !isAvatarThemeId(value)) {
+    return DEFAULT_AVATAR_THEME_ID;
+  }
+  return value;
 };
 
 // 清除所有数据

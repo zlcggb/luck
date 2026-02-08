@@ -91,17 +91,22 @@ export const parseExcelFile = (file: File): Promise<{ headers: string[], data: a
 };
 
 // 根据映射导入数据
-export const processImportData = (data: any[], mapping: { id: string, name: string, dept: string }): Participant[] => {
+export const processImportData = (
+  data: any[],
+  mapping: { id: string; name: string; dept: string; avatar?: string },
+): Participant[] => {
   return data.map((row, index) => {
     const id = row[mapping.id] || String(index + 1);
     const name = row[mapping.name] || '未知';
     const dept = row[mapping.dept] || '';
+    const avatarRaw = mapping.avatar ? row[mapping.avatar] : '';
+    const avatar = String(avatarRaw || '').trim();
     
     return {
       id: String(id).trim(),
       name: String(name).trim(),
       dept: String(dept).trim(),
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(id)}`,
+      avatar: avatar || undefined,
     };
   }).filter(p => p.id && p.name && p.name !== '未知');
 };
@@ -115,6 +120,7 @@ export const importParticipantsFromExcel = async (file: File): Promise<Participa
     id: headers.find(h => ['工号', 'ID', 'id', 'EmployeeID'].includes(h)) || '',
     name: headers.find(h => ['姓名', 'Name', 'name'].includes(h)) || '',
     dept: headers.find(h => ['部门', '组织', 'Dept', 'Department'].includes(h)) || '',
+    avatar: headers.find(h => ['头像', '头像URL', 'Avatar', 'avatar', 'photo'].includes(h)) || '',
   };
   
   if (!mapping.name) {

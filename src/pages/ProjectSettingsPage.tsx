@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -17,7 +17,7 @@ import {
   updatePrize as updatePrizeApi,
   deletePrize as deletePrizeApi
 } from '../utils/supabaseCheckin';
-import { Participant, Prize, DrawRecord, BackgroundMusicSettings, DEFAULT_BACKGROUND_MUSIC } from '../types';
+import { Participant, Prize, DrawRecord, BackgroundMusicSettings, DEFAULT_BACKGROUND_MUSIC, ThemeId, ThemePalette, AvatarThemeId } from '../types';
 import SettingsPanel from '../components/SettingsPanel';
 import {
   saveParticipants,
@@ -27,7 +27,15 @@ import {
   loadRecords,
   loadBackgroundMusicSettings,
   saveBackgroundMusicSettings,
+  loadThemeId,
+  saveThemeId,
+  loadCustomThemePalette,
+  saveCustomThemePalette,
+  loadAvatarThemeId,
+  saveAvatarThemeId,
 } from '../utils/storage';
+import { DEFAULT_CUSTOM_THEME, DEFAULT_THEME_ID, getThemeById, paletteToCssVariables } from '../theme';
+import { DEFAULT_AVATAR_THEME_ID } from '../avatarTheme';
 
 /**
  * 项目设置页面 - 嵌入原有设置面板
@@ -46,6 +54,9 @@ const ProjectSettingsPage = () => {
   const [records, setRecords] = useState<DrawRecord[]>([]);
   const [backgroundMusic, setBackgroundMusic] = useState<BackgroundMusicSettings>(DEFAULT_BACKGROUND_MUSIC);
   const [isMusicPlaying, setIsMusicPlaying] = useState(false);
+  const [themeId, setThemeId] = useState<ThemeId>(DEFAULT_THEME_ID);
+  const [customThemePalette, setCustomThemePalette] = useState<ThemePalette>(DEFAULT_CUSTOM_THEME);
+  const [avatarThemeId, setAvatarThemeId] = useState<AvatarThemeId>(DEFAULT_AVATAR_THEME_ID);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // 初始化
@@ -57,11 +68,26 @@ const ProjectSettingsPage = () => {
 
   useEffect(() => {
     setBackgroundMusic(loadBackgroundMusicSettings());
+    setThemeId(loadThemeId());
+    setCustomThemePalette(loadCustomThemePalette());
+    setAvatarThemeId(loadAvatarThemeId());
   }, []);
 
   useEffect(() => {
     saveBackgroundMusicSettings(backgroundMusic);
   }, [backgroundMusic]);
+
+  useEffect(() => {
+    saveThemeId(themeId);
+  }, [themeId]);
+
+  useEffect(() => {
+    saveCustomThemePalette(customThemePalette);
+  }, [customThemePalette]);
+
+  useEffect(() => {
+    saveAvatarThemeId(avatarThemeId);
+  }, [avatarThemeId]);
 
   useEffect(() => {
     if (backgroundMusic.src) return;
@@ -234,14 +260,20 @@ const ProjectSettingsPage = () => {
     setParticipants([]);
     setPrizes([]);
     setRecords([]);
+    setAvatarThemeId(DEFAULT_AVATAR_THEME_ID);
     saveParticipants([]);
     savePrizes([]);
     saveRecords([]);
   };
 
+  const activePalette = themeId === 'custom'
+    ? customThemePalette
+    : getThemeById(themeId).palette;
+  const themeStyle = paletteToCssVariables(activePalette) as unknown as CSSProperties;
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0b0a1a] flex items-center justify-center">
+      <div data-theme={themeId} style={themeStyle} className="min-h-screen bg-[var(--color-bg-base)] flex items-center justify-center">
         <Loader2 className="w-12 h-12 text-blue-500 animate-spin" />
       </div>
     );
@@ -249,7 +281,7 @@ const ProjectSettingsPage = () => {
 
   if (!project) {
     return (
-      <div className="min-h-screen bg-[#0b0a1a] flex flex-col items-center justify-center text-white">
+      <div data-theme={themeId} style={themeStyle} className="min-h-screen bg-[var(--color-bg-base)] flex flex-col items-center justify-center text-white">
         <p className="text-xl mb-4">项目不存在</p>
         <button onClick={() => navigate('/projects')} className="text-blue-400 hover:underline">
           返回项目列表
@@ -259,7 +291,7 @@ const ProjectSettingsPage = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#0b0a1a] text-white">
+    <div data-theme={themeId} style={themeStyle} className="min-h-screen bg-[var(--color-bg-base)] text-white">
       <audio
         ref={audioRef}
         src={backgroundMusic.src || undefined}
@@ -418,6 +450,12 @@ const ProjectSettingsPage = () => {
         onOpenCheckInDisplay={() => navigate(`/display?event=${projectId}`)}
         currentEventId={projectId}
         onEventChange={(newEventId) => navigate(`/project/${newEventId}`)}
+        themeId={themeId}
+        onThemeChange={setThemeId}
+        customThemePalette={customThemePalette}
+        onCustomThemePaletteChange={setCustomThemePalette}
+        avatarThemeId={avatarThemeId}
+        onAvatarThemeChange={setAvatarThemeId}
         backgroundMusic={backgroundMusic}
         onBackgroundMusicChange={setBackgroundMusic}
         isMusicPlaying={isMusicPlaying}

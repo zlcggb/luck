@@ -31,6 +31,39 @@ export interface BackgroundMusicSettings {
   presetId: string;
 }
 
+export type ThemeId =
+  | 'nebula'
+  | 'festival'
+  | 'macos'
+  | 'clarity'
+  | 'festivalLight'
+  | 'champagne'
+  | 'sunrise'
+  | 'mint'
+  | 'custom';
+
+export type AvatarThemeId =
+  | 'dicebear-avataaars'
+  | 'dicebear-open-peeps'
+  | 'dicebear-lorelei'
+  | 'dicebear-personas'
+  | 'dicebear-pixel-art'
+  | 'dicebear-bottts'
+  | 'ui-official'
+  | 'ui-military'
+  | 'ui-teacher'
+  | 'pravatar-photo'
+  | 'robohash-heroes'
+  | 'unavatar-social';
+
+export interface ThemePalette {
+  primary: string;
+  secondary: string;
+  accent: string;
+  bgBase: string;
+  bgDeep: string;
+}
+
 // 完整的抽奖数据状态
 export interface LotteryState {
   participants: Participant[];  // 所有参与者
@@ -60,4 +93,7 @@ export const STORAGE_KEYS = {
   RECORDS: 'lottery_records',
   EXCLUDED_IDS: 'lottery_excluded_ids',
   BACKGROUND_MUSIC: 'lottery_background_music',
+  THEME: 'lottery_theme',
+  THEME_CUSTOM: 'lottery_theme_custom_palette',
+  AVATAR_THEME: 'lottery_avatar_theme',
 };

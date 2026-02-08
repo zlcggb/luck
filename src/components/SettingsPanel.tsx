@@ -1,16 +1,22 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type SyntheticEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   X, Upload, Download, FileSpreadsheet, Award, History, 
   Trash2, Plus, Minus, RotateCcw, AlertCircle, QrCode, MapPin,
   Sparkles, ChevronRight, Monitor, Settings2, FolderOpen, Loader2,
-  LogIn, Search, UserPlus, Eye
+  LogIn, Search, UserPlus, Eye, Palette
 } from 'lucide-react';
-import { Participant, Prize, DrawRecord, BackgroundMusicSettings } from '../types';
+import { Participant, Prize, DrawRecord, BackgroundMusicSettings, ThemeId, ThemePalette, AvatarThemeId } from '../types';
 import { exportWinnersToExcel, downloadTemplate, parseExcelFile, processImportData } from '../utils/excel';
 import { CheckInSettings, DEFAULT_CHECKIN_SETTINGS } from '../types/checkin';
 import { saveCheckInSettings, loadCheckInSettings, clearCheckInRecords, calculateStats } from '../utils/checkinStorage';
 import { useModal } from '../contexts/ModalContext';
+import { THEME_OPTIONS } from '../theme';
+import {
+  AVATAR_THEME_OPTIONS,
+  getAvatarFallbackUrlForParticipant,
+  getAvatarUrlForParticipant,
+} from '../avatarTheme';
 import { 
   importParticipants,
   addParticipant,
@@ -40,13 +46,19 @@ interface SettingsPanelProps {
   onOpenCheckInDisplay?: () => void;
   currentEventId?: string;
   onEventChange?: (eventId: string) => void;
+  themeId: ThemeId;
+  onThemeChange: (themeId: ThemeId) => void;
+  customThemePalette: ThemePalette;
+  onCustomThemePaletteChange: (palette: ThemePalette) => void;
+  avatarThemeId: AvatarThemeId;
+  onAvatarThemeChange: (avatarThemeId: AvatarThemeId) => void;
   backgroundMusic: BackgroundMusicSettings;
   onBackgroundMusicChange: (settings: BackgroundMusicSettings) => void;
   isMusicPlaying: boolean;
   onToggleMusic: () => void;
 }
 
-type TabType = 'import' | 'prizes' | 'history' | 'export' | 'checkin';
+type TabType = 'import' | 'prizes' | 'history' | 'export' | 'checkin' | 'theme';
 
 const MUSIC_PRESETS = [
   {
@@ -54,6 +66,15 @@ const MUSIC_PRESETS = [
     name: '默认抽奖音乐',
     src: 'https://file.unilumin-gtm.com/719dd328-3fee-4364-80a7-fb7a2a4e2881/1770371983248-%E6%8A%BD%E5%A5%96%E9%9F%B3%E4%B9%90.mp3',
   },
+];
+
+const AVATAR_PREVIEW_FALLBACK_PARTICIPANTS: Participant[] = [
+  { id: 'A001', name: '王老师', dept: '教务处' },
+  { id: 'A002', name: '李政务', dept: '行政中心' },
+  { id: 'A003', name: '陈连长', dept: '保障部' },
+  { id: 'A004', name: 'Mia', dept: '设计部' },
+  { id: 'A005', name: 'Zhang Wei', dept: '产品部' },
+  { id: 'A006', name: '刘晨', dept: '运营部' },
 ];
 
 const SettingsPanel = ({
@@ -70,6 +91,12 @@ const SettingsPanel = ({
   onOpenCheckInDisplay,
   currentEventId,
   onEventChange,
+  themeId,
+  onThemeChange,
+  customThemePalette,
+  onCustomThemePaletteChange,
+  avatarThemeId,
+  onAvatarThemeChange,
   backgroundMusic,
   onBackgroundMusicChange,
   isMusicPlaying,
@@ -111,7 +138,7 @@ const SettingsPanel = ({
 
   // 用于导入预览的状态
   const [previewFile, setPreviewFile] = useState<{ headers: string[], data: any[] } | null>(null);
-  const [columnMapping, setColumnMapping] = useState({ id: '', name: '', dept: '' });
+  const [columnMapping, setColumnMapping] = useState({ id: '', name: '', dept: '', avatar: '' });
 
   // LocalStorage 键名
   const LAST_EVENT_KEY = 'luck_last_event_id';
@@ -315,6 +342,7 @@ const SettingsPanel = ({
         id: headers.find(h => ['工号', 'ID', 'id', 'EmployeeID', '工号/ID'].includes(h)) || headers[0] || '',
         name: headers.find(h => ['姓名', 'Name', 'name', '员工姓名'].includes(h)) || headers[1] || '',
         dept: headers.find(h => ['部门', '组织', 'Dept', 'Department', '部门/组织'].includes(h)) || '',
+        avatar: headers.find(h => ['头像', '头像URL', 'Avatar', 'avatar', 'photo', '图片'].includes(h)) || '',
       };
       setColumnMapping(autoMapping);
 
@@ -374,7 +402,7 @@ const SettingsPanel = ({
 
   const cancelPreview = () => {
     setPreviewFile(null);
-    setColumnMapping({ id: '', name: '', dept: '' });
+    setColumnMapping({ id: '', name: '', dept: '', avatar: '' });
   };
 
   // 成员管理操作
@@ -598,10 +626,125 @@ const SettingsPanel = ({
   const tabs: { id: TabType; label: string; icon: React.ReactNode }[] = [
     { id: 'import', label: '导入名单', icon: <Upload size={18} /> },
     { id: 'prizes', label: '奖项设置', icon: <Award size={18} /> },
+    { id: 'theme', label: '主题配色', icon: <Palette size={18} /> },
     { id: 'checkin', label: '签到', icon: <QrCode size={18} /> },
     { id: 'history', label: '历史', icon: <History size={18} /> },
     { id: 'export', label: '导出', icon: <Download size={18} /> },
   ];
+
+  const lightThemes = THEME_OPTIONS.filter(theme => theme.category === 'light' && theme.id !== 'custom');
+  const darkThemes = THEME_OPTIONS.filter(theme => theme.category === 'dark' && theme.id !== 'custom');
+  const functionalThemes = THEME_OPTIONS.filter(theme => theme.category === 'functional');
+
+  const handleCustomColorChange = (field: keyof ThemePalette, value: string) => {
+    onCustomThemePaletteChange({
+      ...customThemePalette,
+      [field]: value,
+    });
+    onThemeChange('custom');
+  };
+
+  const applyPresetToCustom = (presetId: ThemeId) => {
+    const preset = THEME_OPTIONS.find(theme => theme.id === presetId);
+    if (!preset) return;
+    onCustomThemePaletteChange({ ...preset.palette });
+    onThemeChange('custom');
+    showSuccess(`已复制「${preset.name}」到自定义色盘`);
+  };
+
+  const renderThemeCard = (theme: typeof THEME_OPTIONS[number]) => (
+    <button
+      key={theme.id}
+      onClick={() => onThemeChange(theme.id)}
+      className={`w-full p-3 rounded-xl border text-left transition-all ${
+        themeId === theme.id
+          ? 'border-[var(--color-primary)] bg-[color:rgb(var(--color-primary-rgb)/0.12)] shadow-[0_10px_24px_rgb(var(--color-primary-rgb)/0.2)]'
+          : 'border-white/10 bg-white/5 hover:bg-white/10'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-bold text-white">{theme.name}</div>
+          <div className="text-xs text-gray-400 mt-1">{theme.description}</div>
+        </div>
+        {themeId === theme.id && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[var(--color-primary)] text-white">
+            当前
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-1.5 mt-3">
+        {[
+          (theme.id === 'custom' ? customThemePalette : theme.palette).primary,
+          (theme.id === 'custom' ? customThemePalette : theme.palette).secondary,
+          (theme.id === 'custom' ? customThemePalette : theme.palette).accent,
+          (theme.id === 'custom' ? customThemePalette : theme.palette).bgBase,
+          (theme.id === 'custom' ? customThemePalette : theme.palette).bgDeep,
+        ].map((color, idx) => (
+          <span
+            key={`${theme.id}-${idx}`}
+            className="w-5 h-5 rounded-full border border-white/20"
+            style={{ backgroundColor: color }}
+          />
+        ))}
+      </div>
+    </button>
+  );
+
+  const avatarPreviewParticipants = (
+    participants.length > 0 ? participants.slice(0, 6) : AVATAR_PREVIEW_FALLBACK_PARTICIPANTS
+  ).map((participant, index) => ({
+    id: participant.id || `preview-${index + 1}`,
+    name: participant.name || `用户${index + 1}`,
+    dept: participant.dept || '未分配',
+    avatar: undefined,
+  }));
+
+  const handleAvatarImageError = (event: SyntheticEvent<HTMLImageElement>) => {
+    const img = event.currentTarget;
+    const fallback = img.dataset.fallback;
+    if (fallback && img.src !== fallback) {
+      img.src = fallback;
+    }
+  };
+
+  const renderAvatarThemeCard = (theme: typeof AVATAR_THEME_OPTIONS[number]) => (
+    <button
+      key={theme.id}
+      onClick={() => onAvatarThemeChange(theme.id)}
+      className={`w-full p-3 rounded-xl border text-left transition-all ${
+        avatarThemeId === theme.id
+          ? 'border-[var(--color-primary)] bg-[color:rgb(var(--color-primary-rgb)/0.12)] shadow-[0_10px_24px_rgb(var(--color-primary-rgb)/0.2)]'
+          : 'border-white/10 bg-white/5 hover:bg-white/10'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-bold text-white">{theme.name}</div>
+          <div className="text-xs text-gray-400 mt-1">{theme.description}</div>
+        </div>
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white/10 text-gray-200 uppercase">
+          {theme.provider}
+        </span>
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        {avatarThemeId === theme.id ? (
+          avatarPreviewParticipants.slice(0, 3).map((participant) => (
+            <img
+              key={`${theme.id}-${participant.id}`}
+              src={getAvatarUrlForParticipant(participant, theme.id)}
+              data-fallback={getAvatarFallbackUrlForParticipant(participant, theme.id)}
+              onError={handleAvatarImageError}
+              alt={participant.name}
+              className="w-8 h-8 rounded-full border border-white/20 bg-white/10 object-cover"
+            />
+          ))
+        ) : (
+          <span className="text-[11px] text-gray-500">点击后加载预览</span>
+        )}
+      </div>
+    </button>
+  );
 
   if (!isOpen) return null;
 
@@ -759,7 +902,7 @@ const SettingsPanel = ({
       </div>
       
       {/* 右侧设置面板 */}
-      <div className="relative ml-auto w-full max-w-md h-full bg-[#0f0c29]/95 backdrop-blur-xl border-l border-white/10 shadow-2xl flex flex-col animate-slide-in-right">
+      <div className="relative ml-auto w-full max-w-3xl h-full bg-[#0f0c29]/95 backdrop-blur-xl border-l border-white/10 shadow-2xl flex flex-col animate-slide-in-right">
         {/* 头部 */}
         <div className="flex items-center justify-between p-4 border-b border-white/10">
           <h2 className="text-xl font-bold text-white">设置</h2>
@@ -1063,7 +1206,7 @@ const SettingsPanel = ({
                       </select>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       <div className="space-y-1">
                         <label className="text-xs text-gray-400">选择工号列</label>
                         <select 
@@ -1083,6 +1226,17 @@ const SettingsPanel = ({
                           className="w-full bg-black/40 border border-white/20 rounded px-2 py-2 text-white text-sm focus:border-[#3c80fa] outline-none"
                         >
                            <option value="">(留空)</option>
+                          {previewFile.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-400">选择头像列 (可选)</label>
+                        <select 
+                          value={columnMapping.avatar}
+                          onChange={e => setColumnMapping({...columnMapping, avatar: e.target.value})}
+                          className="w-full bg-black/40 border border-white/20 rounded px-2 py-2 text-white text-sm focus:border-[#3c80fa] outline-none"
+                        >
+                           <option value="">(使用头像主题生成)</option>
                            {previewFile.headers.map(h => <option key={h} value={h}>{h}</option>)}
                         </select>
                       </div>
@@ -1096,10 +1250,11 @@ const SettingsPanel = ({
                         <thead className="bg-white/10 text-white font-bold">
                           <tr>
                             {previewFile.headers.map(h => (
-                               <th key={h} className={`p-2 whitespace-nowrap ${[columnMapping.name, columnMapping.id, columnMapping.dept].includes(h) ? 'text-[#3c80fa]' : ''}`}>
+                               <th key={h} className={`p-2 whitespace-nowrap ${[columnMapping.name, columnMapping.id, columnMapping.dept, columnMapping.avatar].includes(h) ? 'text-[#3c80fa]' : ''}`}>
                                  {h}
                                  {h === columnMapping.name && ' (姓名)'}
                                  {h === columnMapping.id && ' (工号)'}
+                                 {h === columnMapping.avatar && ' (头像)'}
                                </th>
                             ))}
                           </tr>
@@ -1263,6 +1418,131 @@ const SettingsPanel = ({
             </div>
           )}
 
+          {/* 主题配色 */}
+          {activeTab === 'theme' && (
+            <div className="space-y-5">
+              <div className="p-4 bg-white/5 rounded-xl border border-white/10">
+                <div className="flex items-center gap-2 mb-2">
+                  <Palette size={18} className="text-[var(--color-accent)]" />
+                  <span className="font-medium text-white">主题与色盘</span>
+                </div>
+                <p className="text-xs text-gray-400">
+                  预设可一键切换，色盘支持你手动调主色/辅色/强调色/背景色。调色后会自动切换到“自定义色盘”。
+                </p>
+              </div>
+
+              <section className="space-y-3">
+                <h3 className="text-sm font-bold text-white">浅色与亮色</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {lightThemes.map(renderThemeCard)}
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <h3 className="text-sm font-bold text-white">深色主题</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {darkThemes.map(renderThemeCard)}
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <h3 className="text-sm font-bold text-white">功能型主题</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {functionalThemes.map(renderThemeCard)}
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <h3 className="text-sm font-bold text-white">人物头像主题</h3>
+                <p className="text-xs text-gray-400">
+                  支持多头像 API 风格切换。若成员有自定义头像 URL，将优先使用自定义头像。
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {AVATAR_THEME_OPTIONS.map(renderAvatarThemeCard)}
+                </div>
+              </section>
+
+              <section className="p-4 bg-white/5 rounded-xl border border-white/10 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-white">头像预览</h3>
+                  <span className="text-xs text-gray-400">当前：{AVATAR_THEME_OPTIONS.find(item => item.id === avatarThemeId)?.name || '默认'}</span>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  {avatarPreviewParticipants.map((participant) => (
+                    <div key={`preview-${participant.id}`} className="flex items-center gap-2 p-2 rounded-lg bg-black/20 border border-white/10">
+                      <img
+                        src={getAvatarUrlForParticipant(participant, avatarThemeId)}
+                        data-fallback={getAvatarFallbackUrlForParticipant(participant, avatarThemeId)}
+                        onError={handleAvatarImageError}
+                        alt={participant.name}
+                        className="w-10 h-10 rounded-full border border-white/20 bg-white/10 object-cover shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-white truncate">{participant.name}</div>
+                        <div className="text-[10px] text-gray-400 truncate">{participant.dept}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="p-4 bg-white/5 rounded-xl border border-white/10 space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-white">自定义色盘</h3>
+                    <p className="text-xs text-gray-400 mt-1">可在预设基础上微调颜色，适配不同场地与屏幕。</p>
+                  </div>
+                  <button
+                    onClick={() => onThemeChange('custom')}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
+                  >
+                    启用自定义
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {([
+                    { key: 'primary', label: '主色' },
+                    { key: 'secondary', label: '辅色' },
+                    { key: 'accent', label: '强调色' },
+                    { key: 'bgBase', label: '背景浅层' },
+                    { key: 'bgDeep', label: '背景深层' },
+                  ] as Array<{ key: keyof ThemePalette; label: string }>).map(item => (
+                    <div key={item.key} className="p-3 rounded-lg bg-black/20 border border-white/10">
+                      <label className="block text-xs text-gray-400 mb-2">{item.label}</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={customThemePalette[item.key]}
+                          onChange={(e) => handleCustomColorChange(item.key, e.target.value)}
+                          className="w-10 h-10 p-0 rounded border border-white/20 bg-transparent cursor-pointer"
+                        />
+                        <input
+                          type="text"
+                          value={customThemePalette[item.key]}
+                          readOnly
+                          className="flex-1 px-2 py-2 bg-black/30 border border-white/15 rounded text-white text-sm"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  {THEME_OPTIONS.filter(theme => theme.id !== 'custom').map(theme => (
+                    <button
+                      key={`clone-${theme.id}`}
+                      onClick={() => applyPresetToCustom(theme.id)}
+                      className="px-2.5 py-1.5 rounded-lg text-xs bg-white/10 text-gray-200 hover:bg-white/20 transition-colors"
+                    >
+                      用「{theme.name}」做底色
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </div>
+          )}
+
           {/* 历史记录 */}
           {activeTab === 'history' && (
             <div className="space-y-3">
@@ -1299,7 +1579,9 @@ const SettingsPanel = ({
                           className="flex items-center gap-2 bg-black/30 px-2 py-1 rounded-full"
                         >
                           <img 
-                            src={winner.avatar} 
+                            src={getAvatarUrlForParticipant(winner, avatarThemeId)}
+                            data-fallback={getAvatarFallbackUrlForParticipant(winner, avatarThemeId)}
+                            onError={handleAvatarImageError}
                             alt="" 
                             className="w-5 h-5 rounded-full"
                           />

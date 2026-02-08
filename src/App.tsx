@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type CSSProperties, type SyntheticEvent } from 'react';
 import { Play, Square, Trophy, Grid, HelpCircle, Settings, Gift, ChevronRight, X } from 'lucide-react';
 import {
   Participant,
@@ -7,6 +7,9 @@ import {
   DEFAULT_PRIZES,
   BackgroundMusicSettings,
   DEFAULT_BACKGROUND_MUSIC,
+  ThemeId,
+  ThemePalette,
+  AvatarThemeId,
 } from './types';
 import { 
   saveParticipants, loadParticipants, 
@@ -16,6 +19,12 @@ import {
   clearAllData,
   saveBackgroundMusicSettings,
   loadBackgroundMusicSettings,
+  loadThemeId,
+  saveThemeId,
+  loadCustomThemePalette,
+  saveCustomThemePalette,
+  loadAvatarThemeId,
+  saveAvatarThemeId,
 } from './utils/storage';
 import { 
   needsSpecialLayout, 
@@ -26,14 +35,13 @@ import {
 } from './utils/layoutAlgorithm';
 import SettingsPanel from './components/SettingsPanel';
 import { useModal } from './contexts/ModalContext';
-
-// --- 配置色系 ---
-const COLORS = {
-  primary: '#3c80fa',
-  secondary: '#573cfa',
-  accent: '#b63cfa',
-  dark: '#0f0c29',
-};
+import { DEFAULT_CUSTOM_THEME, DEFAULT_THEME_ID, getThemeById, paletteToCssVariables } from './theme';
+import {
+  DEFAULT_AVATAR_THEME_ID,
+  getAvatarCandidatesForParticipant,
+  getAvatarFallbackUrlForParticipant,
+  getAvatarUrlForParticipant,
+} from './avatarTheme';
 
 // --- 模拟数据 (当无导入数据时使用) ---
 const MOCK_PARTICIPANTS: Participant[] = Array.from({ length: 100 }).map((_, i) => ({
@@ -69,7 +77,11 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
   const [batchSize, setBatchSize] = useState(1);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const avatarPreloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const avatarPreloadChunkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const avatarBackgroundPreloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const preloadedAvatarUrlsRef = useRef<Set<string>>(new Set());
 
   // 使用内部弹窗
   const { showWarning, showConfirm } = useModal();
@@ -77,6 +89,9 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
   // --- 初始化：从 LocalStorage 加载数据 ---
   const [isInitialized, setIsInitialized] = useState(false);
   const [backgroundMusic, setBackgroundMusic] = useState<BackgroundMusicSettings>(DEFAULT_BACKGROUND_MUSIC);
+  const [themeId, setThemeId] = useState<ThemeId>(DEFAULT_THEME_ID);
+  const [customThemePalette, setCustomThemePalette] = useState<ThemePalette>(DEFAULT_CUSTOM_THEME);
+  const [avatarThemeId, setAvatarThemeId] = useState<AvatarThemeId>(DEFAULT_AVATAR_THEME_ID);
   
   useEffect(() => {
     const savedParticipants = loadParticipants();
@@ -84,6 +99,9 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
     const savedRecords = loadRecords();
     const savedExcludedIds = loadExcludedIds();
     const savedBackgroundMusic = loadBackgroundMusicSettings();
+    const savedThemeId = loadThemeId();
+    const savedCustomThemePalette = loadCustomThemePalette();
+    const savedAvatarThemeId = loadAvatarThemeId();
     
     // 如果没有保存的参与者，使用模拟数据
     setParticipants(savedParticipants.length > 0 ? savedParticipants : MOCK_PARTICIPANTS);
@@ -91,6 +109,9 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
     setRecords(savedRecords);
     setExcludedIds(savedExcludedIds);
     setBackgroundMusic(savedBackgroundMusic);
+    setThemeId(savedThemeId);
+    setCustomThemePalette(savedCustomThemePalette);
+    setAvatarThemeId(savedAvatarThemeId);
     
     // 设置默认选中的奖项
     if (savedPrizes.length > 0) {
@@ -129,12 +150,110 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
   }, [backgroundMusic, isInitialized]);
 
   useEffect(() => {
+    if (!isInitialized) return;
+    saveThemeId(themeId);
+  }, [themeId, isInitialized]);
+
+  useEffect(() => {
+    if (!isInitialized) return;
+    saveCustomThemePalette(customThemePalette);
+  }, [customThemePalette, isInitialized]);
+
+  useEffect(() => {
+    if (!isInitialized) return;
+    saveAvatarThemeId(avatarThemeId);
+  }, [avatarThemeId, isInitialized]);
+
+  useEffect(() => {
     if (backgroundMusic.src) return;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
     }
   }, [backgroundMusic.src]);
+
+  const getAvatarUrl = (person: Participant): string => {
+    return getAvatarUrlForParticipant(person, avatarThemeId);
+  };
+
+  const getAvatarFallbackUrl = (person: Participant): string => {
+    return getAvatarFallbackUrlForParticipant(person, avatarThemeId);
+  };
+
+  const handleAvatarImageError = (event: SyntheticEvent<HTMLImageElement>) => {
+    const img = event.currentTarget;
+    const fallback = img.dataset.fallback;
+    if (fallback && img.src !== fallback) {
+      img.src = fallback;
+    }
+  };
+
+  const preloadAvatarBatch = (batch: Participant[], candidateLimit: number) => {
+    batch.forEach((participant) => {
+      const candidates = getAvatarCandidatesForParticipant(participant, avatarThemeId).slice(0, candidateLimit);
+      candidates.forEach((avatarUrl) => {
+        if (!avatarUrl || preloadedAvatarUrlsRef.current.has(avatarUrl)) return;
+        const img = new Image();
+        img.src = avatarUrl;
+        preloadedAvatarUrlsRef.current.add(avatarUrl);
+      });
+    });
+  };
+
+  useEffect(() => {
+    if (avatarPreloadTimerRef.current) {
+      clearTimeout(avatarPreloadTimerRef.current);
+      avatarPreloadTimerRef.current = null;
+    }
+    if (avatarPreloadChunkTimerRef.current) {
+      clearTimeout(avatarPreloadChunkTimerRef.current);
+      avatarPreloadChunkTimerRef.current = null;
+    }
+    if (avatarBackgroundPreloadTimerRef.current) {
+      clearTimeout(avatarBackgroundPreloadTimerRef.current);
+      avatarBackgroundPreloadTimerRef.current = null;
+    }
+    if (participants.length === 0 || typeof window === 'undefined') return;
+
+    // 第一阶段：优先把预览区常用头像加载好，确保界面反馈更快。
+    const previewParticipants = participants.slice(0, 6);
+    avatarPreloadTimerRef.current = setTimeout(() => {
+      preloadAvatarBatch(previewParticipants, 2);
+    }, 250);
+
+    // 第二阶段：再按批次后台加载其余头像，避免一次性请求过多导致卡顿。
+    avatarBackgroundPreloadTimerRef.current = setTimeout(() => {
+      const restParticipants = participants.slice(6);
+      let cursor = 0;
+      const chunkSize = 20;
+
+      const preloadNextChunk = () => {
+        const chunk = restParticipants.slice(cursor, cursor + chunkSize);
+        if (chunk.length === 0) return;
+
+        preloadAvatarBatch(chunk, 1);
+        cursor += chunkSize;
+        avatarPreloadChunkTimerRef.current = setTimeout(preloadNextChunk, 180);
+      };
+
+      preloadNextChunk();
+    }, 1800);
+
+    return () => {
+      if (avatarPreloadTimerRef.current) {
+        clearTimeout(avatarPreloadTimerRef.current);
+        avatarPreloadTimerRef.current = null;
+      }
+      if (avatarPreloadChunkTimerRef.current) {
+        clearTimeout(avatarPreloadChunkTimerRef.current);
+        avatarPreloadChunkTimerRef.current = null;
+      }
+      if (avatarBackgroundPreloadTimerRef.current) {
+        clearTimeout(avatarBackgroundPreloadTimerRef.current);
+        avatarBackgroundPreloadTimerRef.current = null;
+      }
+    };
+  }, [participants, avatarThemeId]);
 
   // --- 计算可用参与者（排除已中奖的） ---
   const availableParticipants = participants.filter(p => !excludedIds.has(p.id));
@@ -364,6 +483,9 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
     setRecords([]);
     setExcludedIds(new Set());
     setBackgroundMusic(DEFAULT_BACKGROUND_MUSIC);
+    setThemeId(DEFAULT_THEME_ID);
+    setCustomThemePalette(DEFAULT_CUSTOM_THEME);
+    setAvatarThemeId(DEFAULT_AVATAR_THEME_ID);
     setCurrentDisplay([]);
     setShowConfetti(false);
     setHasDrawn(false);
@@ -382,9 +504,17 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
 
   // 获取最近中奖者（用于底部走马灯）
   const recentWinners = records.flatMap(r => r.winners).slice(0, 20);
+  const activePalette = themeId === 'custom'
+    ? customThemePalette
+    : getThemeById(themeId).palette;
+  const themeStyle = paletteToCssVariables(activePalette) as unknown as CSSProperties;
 
   return (
-    <div className="relative min-h-screen w-full overflow-hidden font-sans text-white selection:bg-pink-500 selection:text-white">
+    <div
+      data-theme={themeId}
+      style={themeStyle}
+      className="relative min-h-screen w-full overflow-hidden font-sans text-white selection:bg-[var(--color-accent)] selection:text-white"
+    >
       <audio
         ref={audioRef}
         src={backgroundMusic.src || undefined}
@@ -396,17 +526,17 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
       />
       
       {/* --- 背景层 --- */}
-      <div className="absolute inset-0 z-0 bg-[#0b0a1a]">
+      <div className="absolute inset-0 z-0 bg-[var(--color-bg-base)]">
         <div 
           className="absolute top-[-10%] left-[-10%] w-[40vw] h-[40vw] rounded-full mix-blend-screen filter blur-[100px] opacity-40 animate-pulse"
-          style={{ backgroundColor: COLORS.primary }}
+          style={{ backgroundColor: 'var(--color-primary)' }}
         />
         <div 
           className="absolute bottom-[-10%] right-[-10%] w-[50vw] h-[50vw] rounded-full mix-blend-screen filter blur-[120px] opacity-30 animate-pulse delay-1000"
-          style={{ backgroundColor: COLORS.secondary }}
+          style={{ backgroundColor: 'var(--color-secondary)' }}
         />
         <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20"></div>
-        <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,41,0)_1px,transparent_1px),linear-gradient(90deg,rgba(18,16,41,0)_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_60%_at_50%_50%,#000_70%,transparent_100%)] border-white/5"></div>
+        <div className="absolute inset-0 bg-[linear-gradient(rgb(var(--color-bg-deep-rgb)/0.32)_1px,transparent_1px),linear-gradient(90deg,rgb(var(--color-bg-deep-rgb)/0.32)_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_60%_at_50%_50%,#000_70%,transparent_100%)] border-white/5"></div>
       </div>
 
       {/* --- 主内容容器 --- */}
@@ -416,26 +546,25 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
         <header className="w-full flex justify-between items-center px-4 py-4 md:px-6 md:py-6 border-b border-white/5 backdrop-blur-sm shrink-0">
           <div className="flex flex-col max-w-[65%] md:max-w-none">
             <h1 className="text-2xl md:text-5xl font-black tracking-wider uppercase italic flex flex-wrap items-center gap-2 md:gap-3 leading-none">
-              <span className="bg-clip-text text-transparent bg-gradient-to-r from-white via-white to-gray-400 drop-shadow-[0_2px_10px_rgba(255,255,255,0.3)]">
+              <span className="bg-clip-text text-transparent bg-gradient-to-r from-[var(--color-text-strong)] via-[var(--color-text-strong)] to-[var(--color-text-secondary)] drop-shadow-[0_2px_10px_rgba(255,255,255,0.3)]">
                 {currentPrize ? currentPrize.name : 'ANNUAL GALA'}
               </span>
-              <span className="text-lg md:text-3xl text-[#b63cfa] not-italic font-medium opacity-80 decoration-2 underline-offset-4">
+              <span className="text-lg md:text-3xl text-[var(--color-accent)] not-italic font-medium opacity-80 decoration-2 underline-offset-4">
                  <span className="hidden md:inline">/ </span>
                  {currentPrize ? (currentPrize.description || currentPrize.name) : 'LUCKY DRAW'}
               </span>
             </h1>
-            <p className="text-[#3c80fa] font-medium tracking-[0.2em] uppercase text-[9px] md:text-xs mt-1 md:mt-2 ml-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
+            <p className="text-[var(--color-text-secondary)] font-medium tracking-[0.2em] uppercase text-[9px] md:text-xs mt-1 md:mt-2 ml-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
               Lucky Draw System
             </p>
           </div>
 
           {/* 右侧控制区 */}
           <div className="flex items-center gap-2 md:gap-6">
-            
             {/* 抽取人数选择 */}
-            <div className="flex items-center bg-[#0b0a1a]/50 backdrop-blur-md rounded-xl p-1 border border-white/10 shadow-inner scale-90 md:scale-100 origin-right">
+            <div className="flex items-center bg-[color:rgb(var(--color-bg-base-rgb)/0.5)] backdrop-blur-md rounded-xl p-1 border border-white/10 shadow-inner scale-90 md:scale-100 origin-right">
               {availableBatchSizes.length === 0 ? (
-                <span className="text-gray-500 text-xs px-3 py-1">--</span>
+                <span className="text-[var(--color-text-muted)] text-xs px-3 py-1">--</span>
               ) : (
                 availableBatchSizes.map(num => (
                   <button
@@ -445,8 +574,8 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                     className={`
                       w-8 h-8 md:w-10 md:h-10 rounded-lg text-sm md:text-base font-bold transition-all flex items-center justify-center
                       ${batchSize === num 
-                        ? 'bg-[#3c80fa] text-white shadow-lg scale-105' 
-                        : 'text-gray-400 hover:text-white hover:bg-white/10'
+                        ? 'bg-[var(--color-primary)] text-white shadow-lg scale-105' 
+                        : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-strong)] hover:bg-white/10'
                       }
                       ${isRolling ? 'opacity-50 cursor-not-allowed' : ''}
                     `}
@@ -462,7 +591,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
              
              <button 
                onClick={() => setSettingsOpen(true)} 
-               className="p-2 md:p-3 bg-white/5 hover:bg-white/10 rounded-full text-gray-400 hover:text-white border border-white/5 transition-all hover:rotate-90 hover:shadow-[0_0_15px_rgba(255,255,255,0.1)] shrink-0"
+               className="p-2 md:p-3 bg-white/5 hover:bg-white/10 rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-text-strong)] border border-white/5 transition-all hover:rotate-90 hover:shadow-[0_0_15px_rgba(255,255,255,0.1)] shrink-0"
                title="设置"
              >
                <Settings size={18} className="md:w-5 md:h-5" />
@@ -494,7 +623,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
             <div 
               className={`
                 absolute left-0 top-0 bottom-0 w-72
-                bg-gradient-to-br from-[#0f0c29]/98 via-[#1a1535]/98 to-[#0b0a1a]/98
+                bg-gradient-to-br from-[color:rgb(var(--color-bg-deep-rgb)/0.98)] via-[color:rgb(var(--color-bg-deep-rgb)/0.9)] to-[color:rgb(var(--color-bg-base-rgb)/0.98)]
                 backdrop-blur-2xl border-r border-white/10
                 shadow-[5px_0_30px_rgba(0,0,0,0.5)]
                 transition-transform duration-300 ease-out
@@ -505,14 +634,14 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
               {/* 侧边栏头部 */}
               <div className="p-4 border-b border-white/10 bg-white/5 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-white/80 uppercase tracking-widest font-bold text-sm">
-                  <Gift size={18} className="text-[#b63cfa]" />
+                  <Gift size={18} className="text-[var(--color-accent)]" />
                   <span>Prize Gallery</span>
                 </div>
                 <button 
                   onClick={() => setMobilePrizeSidebarOpen(false)}
                   className="p-2 rounded-full bg-white/5 hover:bg-white/10 transition-colors"
                 >
-                  <X size={18} className="text-white/60" />
+                  <X size={18} className="text-[var(--color-text-muted)]" />
                 </button>
               </div>
 
@@ -533,7 +662,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                       className={`
                         relative cursor-pointer rounded-xl transition-all duration-300 overflow-hidden
                         ${isActive 
-                          ? 'bg-gradient-to-r from-[#b63cfa]/30 via-[#573cfa]/20 to-transparent border border-[#b63cfa]/50 shadow-[0_0_20px_rgba(182,60,250,0.2)]' 
+                          ? 'bg-gradient-to-r from-[color:rgb(var(--color-accent-rgb)/0.3)] via-[color:rgb(var(--color-secondary-rgb)/0.2)] to-transparent border border-[color:rgb(var(--color-accent-rgb)/0.5)] shadow-[0_0_20px_rgb(var(--color-accent-rgb)/0.2)]' 
                           : 'bg-white/[0.03] border border-white/5 hover:bg-white/[0.06] hover:border-white/10'
                         }
                         ${isRolling ? 'opacity-50 pointer-events-none' : ''}
@@ -544,38 +673,38 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                         <div className={`
                           w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden
                           ${isActive 
-                            ? 'bg-gradient-to-br from-[#b63cfa] to-[#573cfa]' 
+                            ? 'bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-secondary)]' 
                             : isCompleted 
-                              ? 'bg-gradient-to-br from-green-500/20 to-emerald-600/20 border border-green-500/30'
+                              ? 'bg-gradient-to-br from-[color:rgb(var(--color-accent-rgb)/0.2)] to-[color:rgb(var(--color-secondary-rgb)/0.2)] border border-[color:rgb(var(--color-accent-rgb)/0.35)]'
                               : 'bg-white/5 border border-white/10'
                           }
                         `}>
                           {prize.image ? (
                             <img src={prize.image} alt={prize.name} className="w-full h-full object-cover" />
                           ) : (
-                            <Trophy size={20} className={isActive ? 'text-white' : isCompleted ? 'text-green-400' : 'text-white/40'} />
+                            <Trophy size={20} className={isActive ? 'text-white' : isCompleted ? 'text-[var(--color-accent)]' : 'text-white/40'} />
                           )}
                         </div>
                         
                         {/* 奖项信息 */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className={`font-bold text-sm truncate ${isActive ? 'text-white' : 'text-gray-400'}`}>
+                            <span className={`font-bold text-sm truncate ${isActive ? 'text-[var(--color-text-strong)]' : 'text-[var(--color-text-secondary)]'}`}>
                               {prize.name}
                             </span>
                             {isActive && (
-                              <span className="px-1.5 py-0.5 rounded-full bg-[#b63cfa] text-[8px] font-bold text-white shrink-0">
+                              <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-accent)] text-[8px] font-bold text-white shrink-0">
                                 当前
                               </span>
                             )}
                             {isCompleted && !isActive && (
-                              <span className="px-1.5 py-0.5 rounded-full bg-green-500/20 text-green-400 text-[8px] font-bold shrink-0">
+                              <span className="px-1.5 py-0.5 rounded-full bg-[color:rgb(var(--color-accent-rgb)/0.18)] text-[var(--color-accent)] border border-[color:rgb(var(--color-accent-rgb)/0.35)] text-[8px] font-bold shrink-0">
                                 完成
                               </span>
                             )}
                           </div>
                           
-                          <p className="text-xs text-gray-500 truncate mt-0.5">
+                          <p className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">
                             {prize.description || prize.name}
                           </p>
                           
@@ -583,18 +712,18 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                           <div className="mt-2 flex items-center gap-2">
                             <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
                               <div 
-                                className={`h-full rounded-full transition-all duration-500 ${isCompleted ? 'bg-green-500' : 'bg-gradient-to-r from-[#3c80fa] to-[#b63cfa]'}`}
+                                className={`h-full rounded-full transition-all duration-500 ${isCompleted ? 'bg-[var(--color-accent)]' : 'bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)]'}`}
                                 style={{ width: `${progress}%` }}
                               />
                             </div>
-                            <span className={`text-[10px] font-mono shrink-0 ${isCompleted ? 'text-green-400' : 'text-gray-500'}`}>
+                            <span className={`text-[10px] font-mono shrink-0 ${isCompleted ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'}`}>
                               {prize.drawn}/{prize.count}
                             </span>
                           </div>
                         </div>
                         
                         {/* 箭头 */}
-                        <ChevronRight size={16} className={`shrink-0 transition-colors ${isActive ? 'text-[#b63cfa]' : 'text-white/20'}`} />
+                        <ChevronRight size={16} className={`shrink-0 transition-colors ${isActive ? 'text-[var(--color-accent)]' : 'text-white/20'}`} />
                       </div>
                     </div>
                   );
@@ -603,7 +732,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
               
               {/* 底部装饰 */}
               <div className="p-3 border-t border-white/5 bg-white/[0.02]">
-                <div className="text-center text-[10px] text-gray-600 uppercase tracking-wider">
+                <div className="text-center text-[10px] text-[var(--color-text-soft)] uppercase tracking-wider">
                   点击选择奖项
                 </div>
               </div>
@@ -615,7 +744,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
             {/* Sidebar Header */}
             <div className="p-4 border-b border-white/5 bg-white/5">
               <div className="flex items-center gap-2 text-white/80 uppercase tracking-widest font-bold text-sm">
-                <Gift size={16} className="text-[#b63cfa]" />
+                <Gift size={16} className="text-[var(--color-accent)]" />
                 <span>Prize Gallery</span>
               </div>
             </div>
@@ -633,14 +762,14 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                     className={`
                       relative group cursor-pointer rounded-2xl transition-all duration-500 ease-out overflow-hidden border
                       ${isActive 
-                        ? 'w-full h-48 border-[#b63cfa]/50 shadow-[0_0_30px_rgba(182,60,250,0.25)] bg-gradient-to-br from-[#b63cfa]/30 via-[#573cfa]/20 to-[#0b0a1a]' 
+                        ? 'w-full h-48 border-[color:rgb(var(--color-accent-rgb)/0.5)] shadow-[0_0_30px_rgb(var(--color-accent-rgb)/0.25)] bg-gradient-to-br from-[color:rgb(var(--color-accent-rgb)/0.3)] via-[color:rgb(var(--color-secondary-rgb)/0.2)] to-[var(--color-bg-base)]' 
                         : 'w-full h-20 border-white/5 bg-white/[0.03] hover:bg-white/[0.08] hover:border-white/10'
                       }
                       ${isRolling ? 'opacity-50 pointer-events-none grayscale' : ''}
                     `}
                   >
                     {/* Background Image - Only visible when active */}
-                    <div className="absolute inset-0 z-0 bg-[#0b0a1a]">
+                    <div className="absolute inset-0 z-0 bg-[var(--color-bg-base)]">
                       {prize.image && (
                         <img 
                           src={prize.image} 
@@ -650,10 +779,10 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                       )}
                       
                       {/* Gradient Overlay */}
-                      <div className={`absolute inset-0 bg-gradient-to-t from-[#0b0a1a] via-[#0b0a1a]/60 to-transparent transition-opacity duration-500 ${isActive ? 'opacity-100' : 'opacity-0'}`}></div>
+                      <div className={`absolute inset-0 bg-gradient-to-t from-[var(--color-bg-base)] via-[color:rgb(var(--color-bg-base-rgb)/0.6)] to-transparent transition-opacity duration-500 ${isActive ? 'opacity-100' : 'opacity-0'}`}></div>
                       
                       {/* Active Glow Effect */}
-                      {isActive && <div className="absolute top-0 right-0 w-32 h-32 bg-[#b63cfa] blur-[60px] opacity-20 rounded-full pointer-events-none -translate-y-1/2 translate-x-1/2"></div>}
+                      {isActive && <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-accent)] blur-[60px] opacity-20 rounded-full pointer-events-none -translate-y-1/2 translate-x-1/2"></div>}
                     </div>
 
                     {/* Content */}
@@ -661,17 +790,17 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                       
                       {/* Top Row: Level Name & Badge */}
                       <div className={`flex items-center justify-between transition-all duration-500 z-10 ${isActive ? 'mb-auto' : ''}`}>
-                        <span className={`font-black uppercase tracking-wider transition-all duration-500 truncate mr-2 ${isActive ? 'text-3xl text-white translate-y-2 text-shadow' : 'text-base text-gray-500 group-hover:text-gray-300'}`}>
+                        <span className={`font-black uppercase tracking-wider transition-all duration-500 truncate mr-2 ${isActive ? 'text-3xl text-[var(--color-text-strong)] translate-y-2 text-shadow' : 'text-base text-[var(--color-text-muted)] group-hover:text-[var(--color-text-strong)]'}`}>
                           {prize.name}
                         </span>
                         
                         {isActive && (
-                          <div className="px-2 py-0.5 rounded-full bg-gradient-to-r from-[#b63cfa] to-[#573cfa] text-[10px] font-bold tracking-wider text-white shadow-lg animate-fade-in border border-white/10 whitespace-nowrap">
+                          <div className="px-2 py-0.5 rounded-full bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-secondary)] text-[10px] font-bold tracking-wider text-white shadow-lg animate-fade-in border border-white/10 whitespace-nowrap">
                             ACTIVE
                           </div>
                         )}
                         {!isActive && isCompleted && (
-                          <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-500/10 text-green-400 text-[10px] font-bold tracking-wider border border-green-500/20 whitespace-nowrap">
+                          <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-[color:rgb(var(--color-accent-rgb)/0.16)] text-[var(--color-accent)] text-[10px] font-bold tracking-wider border border-[color:rgb(var(--color-accent-rgb)/0.3)] whitespace-nowrap">
                             <span>DONE</span>
                           </div>
                         )}
@@ -687,13 +816,13 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                          
                          {/* Stats Row */}
                          <div className="flex items-center gap-3">
-                            <span className={`font-mono font-bold text-sm ${prize.drawn >= prize.count ? "text-green-400" : "text-[#3c80fa]"}`}>
+                            <span className={`font-mono font-bold text-sm ${prize.drawn >= prize.count ? "text-[var(--color-accent)]" : "text-[var(--color-text-secondary)]"}`}>
                               Qty: {prize.count - prize.drawn}
                             </span>
                             {/* Progress Bar */}
                             <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden backdrop-blur-sm border border-white/5">
                               <div 
-                                className={`h-full rounded-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(0,0,0,0.5)] ${prize.drawn >= prize.count ? 'bg-green-500' : 'bg-gradient-to-r from-[#3c80fa] to-[#b63cfa]'}`}
+                                className={`h-full rounded-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(0,0,0,0.5)] ${prize.drawn >= prize.count ? 'bg-[var(--color-accent)]' : 'bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)]'}`}
                                 style={{ width: `${(prize.drawn / prize.count) * 100}%` }}
                               ></div>
                             </div>
@@ -711,21 +840,17 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
           <main className="flex-1 flex flex-col justify-center items-center relative min-h-0 overflow-hidden px-2 md:px-0">
             
             {/* 光环特效 */}
-            <div className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] h-[90%] rounded-full bg-gradient-to-r from-[#3c80fa] via-[#b63cfa] to-[#573cfa] blur-[100px] opacity-10 transition-all duration-300 ${isRolling ? 'opacity-30 scale-110' : ''}`}></div>
+            <div className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] h-[90%] rounded-full bg-gradient-to-r from-[var(--color-primary)] via-[var(--color-accent)] to-[var(--color-secondary)] blur-[100px] opacity-10 transition-all duration-300 ${isRolling ? 'opacity-30 scale-110' : ''}`}></div>
 
             {/* 当前奖项提示 (Mobile Only: Floating top if needed, otherwise rely on sidebar active state) - Optional, kept standard */}
             {currentPrize && (
               <div className="absolute top-0 left-1/2 -translate-x-1/2 z-30 pt-2 md:pt-0">
-                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[10px] md:text-sm shadow-xl backdrop-blur-md ${
-                  isPrizeCompleted 
-                    ? 'bg-gradient-to-r from-green-500/20 to-emerald-600/20 border-green-500/30' 
-                    : 'bg-gradient-to-r from-[#b63cfa]/20 to-[#573cfa]/20 border-[#b63cfa]/30'
-                }`}>
-                  <span className={`font-bold ${isPrizeCompleted ? 'text-green-400' : 'text-[#b63cfa]'}`}>{currentPrize.name}</span>
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[10px] md:text-sm shadow-xl backdrop-blur-md bg-gradient-to-r from-[color:rgb(var(--color-accent-rgb)/0.2)] to-[color:rgb(var(--color-secondary-rgb)/0.2)] border-[color:rgb(var(--color-accent-rgb)/0.3)]">
+                  <span className="font-bold text-[var(--color-accent)]">{currentPrize.name}</span>
                   {isPrizeCompleted ? (
-                    <span className="text-green-300/70">✓ 已抽完 · 共 {currentPrize.count} 人</span>
+                    <span className="text-[color:rgb(var(--color-accent-rgb)/0.75)]">✓ 已抽完 · 共 {currentPrize.count} 人</span>
                   ) : (
-                    <span className="text-white/50">剩余 {currentPrize.count - currentPrize.drawn}</span>
+                    <span className="text-[var(--color-text-soft)]">剩余 {currentPrize.count - currentPrize.drawn}</span>
                   )}
                 </span>
               </div>
@@ -756,24 +881,26 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                           {rowWinners.map((winner, idx) => (
                             <div 
                               key={`winner-${winner.id}-${idx}`}
-                              className={`relative overflow-hidden bg-gradient-to-br from-green-500/15 to-emerald-600/15 backdrop-blur-xl border border-green-500/30 rounded-xl md:rounded-2xl flex flex-col items-center justify-center shadow-[0_0_20px_rgba(34,197,94,0.2)] hover:shadow-[0_0_35px_rgba(34,197,94,0.35)] transition-all duration-300 hover:scale-[1.03] shrink-0 ${style.container} ${style.padding}`}
+                              className={`relative overflow-hidden bg-gradient-to-br from-[color:rgb(var(--color-accent-rgb)/0.16)] to-[color:rgb(var(--color-secondary-rgb)/0.18)] backdrop-blur-xl border border-[color:rgb(var(--color-accent-rgb)/0.35)] rounded-xl md:rounded-2xl flex flex-col items-center justify-center shadow-[0_0_20px_rgb(var(--color-accent-rgb)/0.2)] hover:shadow-[0_0_35px_rgb(var(--color-accent-rgb)/0.35)] transition-all duration-300 hover:scale-[1.03] shrink-0 ${style.container} ${style.padding}`}
                             >
                               {/* Winner 标记 */}
-                              <div className="absolute top-1 left-1 md:top-2 md:left-2 px-1.5 md:px-2 py-0.5 md:py-1 bg-gradient-to-r from-green-500 to-emerald-500 rounded-md text-[7px] md:text-[9px] font-bold uppercase tracking-wider shadow-lg">
+                              <div className="absolute top-1 left-1 md:top-2 md:left-2 px-1.5 md:px-2 py-0.5 md:py-1 bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)] rounded-md text-[7px] md:text-[9px] font-bold uppercase tracking-wider shadow-lg">
                                 ★ Winner
                               </div>
                               
                               {/* 序号 */}
-                              <div className="absolute top-1 right-1 md:top-2 md:right-2 px-1.5 md:px-2 py-0.5 bg-white/10 rounded-md text-[8px] md:text-[10px] font-bold text-white/60">
+                              <div className="absolute top-1 right-1 md:top-2 md:right-2 px-1.5 md:px-2 py-0.5 bg-white/10 rounded-md text-[8px] md:text-[10px] font-bold text-[var(--color-text-muted)]">
                                 #{itemIndex - rowCount + idx + 1}
                               </div>
                               
                               {/* 头像 */}
                               <div className="mt-3 md:mt-5">
                                 <img 
-                                  src={winner.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${winner.id}`} 
+                                  src={getAvatarUrl(winner)} 
+                                  data-fallback={getAvatarFallbackUrl(winner)}
+                                  onError={handleAvatarImageError}
                                   alt="avatar" 
-                                  className={`rounded-full object-cover shadow-xl border-2 md:border-4 border-green-500/60 ${style.avatar}`}
+                                  className={`rounded-full object-cover shadow-xl border-2 md:border-4 border-[color:rgb(var(--color-accent-rgb)/0.6)] ${style.avatar}`}
                                 />
                               </div>
                               
@@ -782,10 +909,10 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                                 <h3 className={`font-black text-white truncate drop-shadow-md ${style.name}`}>
                                   {winner.name}
                                 </h3>
-                                <p className={`text-green-400/80 truncate font-medium mt-0.5 ${style.dept}`}>
+                                <p className={`text-[color:rgb(var(--color-accent-rgb)/0.86)] truncate font-medium mt-0.5 ${style.dept}`}>
                                   {winner.dept}
                                 </p>
-                                <p className={`text-gray-400 mt-0.5 ${style.id || 'text-[8px] md:text-[10px]'}`}>
+                                <p className={`text-[var(--color-text-secondary)] mt-0.5 ${style.id || 'text-[8px] md:text-[10px]'}`}>
                                   {winner.id}
                                 </p>
                               </div>
@@ -869,7 +996,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                                   shadow-[0_0_20px_rgba(0,0,0,0.3)]
                                   transition-all duration-300
                                   ${batchSize === 5 ? 'p-2 md:p-3 lg:p-4 flex-1 max-w-[180px] md:max-w-[220px] lg:max-w-[260px]' : 'p-1.5 md:p-2 lg:p-3 flex-1 max-w-[140px] md:max-w-[170px] lg:max-w-[200px]'}
-                                  ${showConfetti ? 'ring-2 ring-[#b63cfa] scale-[1.01] shadow-[0_0_30px_rgba(182,60,250,0.3)]' : ''}
+                                  ${showConfetti ? 'ring-2 ring-[var(--color-accent)] scale-[1.01] shadow-[0_0_30px_rgb(var(--color-accent-rgb)/0.3)]' : ''}
                                 `}
                               >
                                 <div className="absolute top-0 right-0 p-1 md:p-2 opacity-30">
@@ -878,31 +1005,33 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
 
                                 <div className={`flex items-center ${cardStyle.layout}`}>
                                   <div className="relative group shrink-0">
-                                    {isRolling && <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-[#3c80fa] to-[#b63cfa] blur-md animate-spin"></div>}
+                                    {isRolling && <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-[var(--color-primary)] to-[var(--color-accent)] blur-md animate-spin"></div>}
                                     <img 
-                                      src={user.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`} 
+                                      src={getAvatarUrl(user)} 
+                                      data-fallback={getAvatarFallbackUrl(user)}
+                                      onError={handleAvatarImageError}
                                       alt="avatar" 
                                       className={`
                                         relative rounded-full object-cover shadow-2xl transition-all
                                         ${cardStyle.avatar}
-                                        ${isRolling ? 'border-white/20 scale-95' : 'border-[#b63cfa] scale-100'}
+                                        ${isRolling ? 'border-white/20 scale-95' : 'border-[var(--color-accent)] scale-100'}
                                       `}
                                     />
                                   </div>
 
                                   <div className="min-w-0 text-center">
                                     <h2 className={`
-                                      font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-gray-400 drop-shadow-md truncate
+                                      font-black text-transparent bg-clip-text bg-gradient-to-b from-[var(--color-text-strong)] to-[var(--color-text-secondary)] drop-shadow-md truncate
                                       ${cardStyle.name}
                                       ${isRolling ? 'blur-[1px]' : ''}
                                     `}>
                                       {user.name}
                                     </h2>
-                                    <p className={`font-light tracking-widest text-[#3c80fa] uppercase truncate ${cardStyle.dept}`}>
+                                    <p className={`font-light tracking-widest text-[var(--color-text-secondary)] uppercase truncate ${cardStyle.dept}`}>
                                       {user.dept}
                                     </p>
                                     {showConfetti && (
-                                      <p className="text-gray-500 mt-0.5 text-[8px] md:text-[10px]">
+                                      <p className="text-[var(--color-text-muted)] mt-0.5 text-[8px] md:text-[10px]">
                                         工号: {user.id}
                                       </p>
                                     )}
@@ -910,7 +1039,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                                 </div>
 
                                 {showConfetti && (
-                                  <div className="absolute top-0.5 left-0.5 md:top-1 md:left-1 px-1 md:px-1.5 py-0.5 bg-[#b63cfa] rounded text-[6px] md:text-[8px] font-bold uppercase tracking-wider animate-bounce">
+                                  <div className="absolute top-0.5 left-0.5 md:top-1 md:left-1 px-1 md:px-1.5 py-0.5 bg-[var(--color-accent)] rounded text-[6px] md:text-[8px] font-bold uppercase tracking-wider animate-bounce">
                                     Winner
                                   </div>
                                 )}
@@ -988,7 +1117,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                       shadow-[0_0_20px_rgba(0,0,0,0.3)]
                       transition-all duration-300
                       ${batchSize === 1 ? 'p-4 md:p-6 lg:p-8' : batchSize === 4 ? 'p-3 md:p-4 lg:p-5' : batchSize === 9 ? 'p-2 md:p-3' : 'p-1.5 md:p-2'}
-                      ${showConfetti ? 'ring-2 ring-[#b63cfa] scale-[1.01] shadow-[0_0_30px_rgba(182,60,250,0.3)]' : ''}
+                      ${showConfetti ? 'ring-2 ring-[var(--color-accent)] scale-[1.01] shadow-[0_0_30px_rgb(var(--color-accent-rgb)/0.3)]' : ''}
                     `}
                   >
                     <div className="absolute top-0 right-0 p-1 md:p-2 opacity-30">
@@ -997,31 +1126,33 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
 
                     <div className={`flex items-center ${cardStyle.layout}`}>
                       <div className="relative group shrink-0">
-                         {isRolling && <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-[#3c80fa] to-[#b63cfa] blur-md animate-spin"></div>}
+                         {isRolling && <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-[var(--color-primary)] to-[var(--color-accent)] blur-md animate-spin"></div>}
                          <img 
-                          src={user.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`} 
+                          src={getAvatarUrl(user)} 
+                          data-fallback={getAvatarFallbackUrl(user)}
+                          onError={handleAvatarImageError}
                           alt="avatar" 
                           className={`
                             relative rounded-full object-cover shadow-2xl transition-all
                             ${cardStyle.avatar}
-                            ${isRolling ? 'border-white/20 scale-95' : 'border-[#b63cfa] scale-100'}
+                            ${isRolling ? 'border-white/20 scale-95' : 'border-[var(--color-accent)] scale-100'}
                           `}
                         />
                       </div>
 
                       <div className={`min-w-0 ${batchSize === 1 ? 'text-center md:text-left' : 'text-center'}`}>
                         <h2 className={`
-                          font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-gray-400 drop-shadow-md truncate
+                          font-black text-transparent bg-clip-text bg-gradient-to-b from-[var(--color-text-strong)] to-[var(--color-text-secondary)] drop-shadow-md truncate
                           ${cardStyle.name}
                           ${isRolling ? 'blur-[1px]' : ''}
                         `}>
                           {user.name}
                         </h2>
-                        <p className={`font-light tracking-widest text-[#3c80fa] uppercase truncate ${cardStyle.dept}`}>
+                        <p className={`font-light tracking-widest text-[var(--color-text-secondary)] uppercase truncate ${cardStyle.dept}`}>
                           {user.dept}
                         </p>
                         {showConfetti && batchSize < 16 && (
-                          <p className={`text-gray-500 mt-0.5 ${batchSize >= 9 ? 'text-[8px] md:text-[10px]' : 'text-[10px] md:text-xs'}`}>
+                          <p className={`text-[var(--color-text-muted)] mt-0.5 ${batchSize >= 9 ? 'text-[8px] md:text-[10px]' : 'text-[10px] md:text-xs'}`}>
                             工号: {user.id}
                           </p>
                         )}
@@ -1029,7 +1160,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                     </div>
 
                     {showConfetti && (
-                       <div className={`absolute top-0.5 left-0.5 md:top-1 md:left-1 px-1 md:px-1.5 py-0.5 bg-[#b63cfa] rounded text-[6px] md:text-[8px] font-bold uppercase tracking-wider animate-bounce ${batchSize >= 16 ? 'hidden md:block' : ''}`}>
+                       <div className={`absolute top-0.5 left-0.5 md:top-1 md:left-1 px-1 md:px-1.5 py-0.5 bg-[var(--color-accent)] rounded text-[6px] md:text-[8px] font-bold uppercase tracking-wider animate-bounce ${batchSize >= 16 ? 'hidden md:block' : ''}`}>
                          Winner
                        </div>
                     )}
@@ -1049,7 +1180,7 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                 px-3 py-2 rounded-full font-bold
                 transition-all duration-300 transform hover:scale-105 active:scale-95
                 shadow-[0_4px_20px_rgba(0,0,0,0.3)]
-                bg-gradient-to-r from-[#b63cfa]/80 to-[#573cfa]/80 backdrop-blur-sm text-white border border-white/20 hover:border-[#b63cfa]/50
+                bg-gradient-to-r from-[color:rgb(var(--color-accent-rgb)/0.8)] to-[color:rgb(var(--color-secondary-rgb)/0.8)] backdrop-blur-sm text-white border border-white/20 hover:border-[color:rgb(var(--color-accent-rgb)/0.5)]
                 flex items-center gap-1.5
                 ${isRolling ? 'opacity-50 pointer-events-none' : ''}
               `}
@@ -1097,8 +1228,8 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
                 ${isRolling 
                   ? 'bg-gradient-to-r from-red-500 to-orange-600 text-white ring-2 md:ring-4 ring-red-500/30' 
                   : isPrizeCompleted && !showAllWinners
-                    ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white ring-2 md:ring-4 ring-green-500/30'
-                    : 'bg-gradient-to-r from-[#3c80fa] to-[#573cfa] text-white ring-2 md:ring-4 ring-[#3c80fa]/30'
+                    ? 'bg-gradient-to-r from-[var(--color-secondary)] to-[var(--color-primary)] text-white ring-2 md:ring-4 ring-[color:rgb(var(--color-accent-rgb)/0.35)]'
+                    : 'bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-secondary)] text-white ring-2 md:ring-4 ring-[color:rgb(var(--color-primary-rgb)/0.3)]'
                 }
               `}
             >
@@ -1133,18 +1264,24 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
 
         {/* 3. 底部：中奖名单走马灯 */}
         <footer className="w-full h-12 md:h-14 mt-2 relative rounded-lg md:rounded-xl bg-white/5 backdrop-blur-md border border-white/5 overflow-hidden flex flex-col justify-center shrink-0">
-          <div className="absolute top-1 md:top-1.5 left-3 md:left-4 text-[8px] md:text-[10px] font-bold uppercase text-gray-500 tracking-wider flex items-center gap-1">
-             <div className="w-1.5 h-1.5 rounded-full bg-[#b63cfa] animate-pulse"></div>
+          <div className="absolute top-1 md:top-1.5 left-3 md:left-4 text-[8px] md:text-[10px] font-bold uppercase text-[var(--color-text-muted)] tracking-wider flex items-center gap-1">
+             <div className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-pulse"></div>
              最新中奖
           </div>
           
           <div className="flex items-center gap-2 overflow-x-auto px-3 md:px-4 pt-2.5 md:pt-2 no-scrollbar scroll-smooth h-full">
             {recentWinners.length === 0 ? (
-              <div className="w-full text-center text-gray-600 italic text-[10px] md:text-xs">等待抽奖...</div>
+              <div className="w-full text-center text-[var(--color-text-soft)] italic text-[10px] md:text-xs">等待抽奖...</div>
             ) : (
               recentWinners.map((winner, idx) => (
                 <div key={`${winner.id}-${idx}`} className="flex-shrink-0 flex items-center gap-1 bg-black/30 pr-2 pl-1 py-0.5 rounded-full border border-white/5">
-                  <img src={winner.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${winner.id}`} className="w-4 h-4 md:w-5 md:h-5 rounded-full border border-[#b63cfa]" alt="" />
+                  <img
+                    src={getAvatarUrl(winner)}
+                    data-fallback={getAvatarFallbackUrl(winner)}
+                    onError={handleAvatarImageError}
+                    className="w-4 h-4 md:w-5 md:h-5 rounded-full border border-[var(--color-accent)]"
+                    alt=""
+                  />
                   <span className="text-white font-bold text-[8px] md:text-[10px]">{winner.name}</span>
                 </div>
               ))
@@ -1166,6 +1303,12 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
         onUndoRecord={handleUndoRecord}
         onClearAll={handleClearAll}
         onOpenCheckInDisplay={onOpenCheckInDisplay}
+        themeId={themeId}
+        onThemeChange={setThemeId}
+        customThemePalette={customThemePalette}
+        onCustomThemePaletteChange={setCustomThemePalette}
+        avatarThemeId={avatarThemeId}
+        onAvatarThemeChange={setAvatarThemeId}
         backgroundMusic={backgroundMusic}
         onBackgroundMusicChange={setBackgroundMusic}
         isMusicPlaying={isMusicPlaying}
