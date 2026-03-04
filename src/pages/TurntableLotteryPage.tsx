@@ -51,32 +51,62 @@ const SPIN_DURATION = 6000;
 
 // 表单字段配置类型
 type FormField = {
-  key: string;       // 对应 formData / luck_winners 的字段名
-  label: string;     // 占位符 / 显示标签
-  type: 'text' | 'tel' | 'email'; // 输入类型
-  required: boolean; // 是否必填
-  enabled: boolean;  // 是否启用（显示）
-  locked: boolean;   // 是否锁定（不可关闭）
+  key: string;
+  label: string;     // 中文标签
+  labelEn: string;   // 英文标签
+  type: 'text' | 'tel' | 'email';
+  required: boolean;
+  enabled: boolean;
+  locked: boolean;
 };
 
 const DEFAULT_FORM_FIELDS: FormField[] = [
-  // 基础联系信息（必填核心）
-  { key: 'name',        label: '您的姓名',           type: 'text',  required: true,  enabled: true,  locked: true },
-  { key: 'phone',       label: '手机号码',           type: 'tel',   required: true,  enabled: true,  locked: true },
-  // 扩展联系方式
-  { key: 'company',     label: '所在公司',           type: 'text',  required: false, enabled: true,  locked: false },
-  { key: 'email',       label: '邮箱',               type: 'email', required: false, enabled: false, locked: false },
-  { key: 'wechat',      label: '微信号',             type: 'text',  required: false, enabled: false, locked: false },
-  // 身份信息
-  { key: 'department',  label: '部门',               type: 'text',  required: false, enabled: false, locked: false },
-  { key: 'job_title',   label: '职位',               type: 'text',  required: false, enabled: false, locked: false },
-  { key: 'employee_id', label: '工号',               type: 'text',  required: false, enabled: false, locked: false },
-  // 需求意向
-  { key: 'interest',    label: '感兴趣的产品/方案',  type: 'text',  required: false, enabled: false, locked: false },
-  { key: 'scenario',    label: '应用场景',           type: 'text',  required: false, enabled: false, locked: false },
-  { key: 'need_contact',label: '是否需要专人联系',   type: 'text',  required: false, enabled: false, locked: false },
-  { key: 'remark',      label: '备注',               type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'name',        label: '您的姓名',          labelEn: 'Full Name',              type: 'text',  required: true,  enabled: true,  locked: true },
+  { key: 'phone',       label: '手机号码',          labelEn: 'Phone Number',          type: 'tel',   required: true,  enabled: true,  locked: true },
+  { key: 'company',     label: '所在公司',          labelEn: 'Company',               type: 'text',  required: false, enabled: true,  locked: false },
+  { key: 'email',       label: '邮箱',              labelEn: 'Email',                 type: 'email', required: false, enabled: false, locked: false },
+  { key: 'wechat',      label: '微信号',            labelEn: 'WeChat ID',             type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'department',  label: '部门',              labelEn: 'Department',            type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'job_title',   label: '职位',              labelEn: 'Job Title',             type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'employee_id', label: '工号',              labelEn: 'Employee ID',           type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'interest',    label: '感兴趣的产品/方案', labelEn: 'Products of Interest',  type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'scenario',    label: '应用场景',          labelEn: 'Application Scenario',  type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'need_contact',label: '是否需要专人联系',  labelEn: 'Request a Consultation',type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'remark',      label: '备注',              labelEn: 'Remarks',               type: 'text',  required: false, enabled: false, locked: false },
 ];
+
+// 双语翻译表
+const I18N = {
+  zh: {
+    optional: '（选填）',
+    errDuplicate: '该手机号已参与过本次活动',
+    errFail: '抽奖失败，请重试',
+    spinning: '...',
+    spinStart: '开始',
+    congratsTitle: '恭喜获奖',
+    congratsSub: '请凭此凭证前往展台服务处兑换奖品',
+    certLabel: '获奖证明',
+    winnerName: '获奖者',
+    winnerPhone: '手机尾号',
+    scanRedeem: '扫码核销',
+    scanHint: '请出示此码至展台服务处兑换',
+  },
+  en: {
+    optional: ' (Optional)',
+    errDuplicate: 'This phone number has already participated.',
+    errFail: 'Draw failed, please try again.',
+    spinning: '...',
+    spinStart: 'SPIN',
+    congratsTitle: 'Congratulations!',
+    congratsSub: 'Please show this voucher at the booth to claim your prize.',
+    certLabel: 'Prize Certificate',
+    winnerName: 'Winner',
+    winnerPhone: 'Phone (last 4)',
+    scanRedeem: 'Scan to Redeem',
+    scanHint: 'Present this QR code at the exhibition booth.',
+  },
+} as const;
+type Lang = 'zh' | 'en';
 
 // ==========================================
 // 主入口
@@ -95,6 +125,13 @@ export default function TurntableLotteryPage() {
   const [formSubtitle, setFormSubtitle] = useState('ISLE 2026 · LED Display Exhibition');
   const [formButtonText, setFormButtonText] = useState('登记并参与抽奖');
   const [footerText, setFooterText] = useState('ISLE 2026 LED光显科技展');
+  // 英文版本
+  const [wheelTitleEn, setWheelTitleEn] = useState('Lucky Draw');
+  const [wheelSubtitleEn, setWheelSubtitleEn] = useState('Tap center to spin');
+  const [formTitleEn, setFormTitleEn] = useState('Lucky Draw 2026');
+  const [formSubtitleEn, setFormSubtitleEn] = useState('ISLE 2026 · LED Display Exhibition');
+  const [formButtonTextEn, setFormButtonTextEn] = useState('Register & Draw');
+  const [footerTextEn, setFooterTextEn] = useState('ISLE 2026 LED Display Technology');
   const [formFields, setFormFields] = useState<FormField[]>(DEFAULT_FORM_FIELDS);
 
   // 从 Supabase 加载奖品和中奖记录
@@ -115,6 +152,12 @@ export default function TurntableLotteryPage() {
       if (s.formSubtitle) setFormSubtitle(s.formSubtitle as string);
       if (s.formButtonText) setFormButtonText(s.formButtonText as string);
       if (s.footerText) setFooterText(s.footerText as string);
+      if (s.wheelTitleEn) setWheelTitleEn(s.wheelTitleEn as string);
+      if (s.wheelSubtitleEn) setWheelSubtitleEn(s.wheelSubtitleEn as string);
+      if (s.formTitleEn) setFormTitleEn(s.formTitleEn as string);
+      if (s.formSubtitleEn) setFormSubtitleEn(s.formSubtitleEn as string);
+      if (s.formButtonTextEn) setFormButtonTextEn(s.formButtonTextEn as string);
+      if (s.footerTextEn) setFooterTextEn(s.footerTextEn as string);
       if (Array.isArray(s.formFields)) {
         // Merge saved fields with defaults to handle new fields added later
         const saved = s.formFields as FormField[];
@@ -170,10 +213,16 @@ export default function TurntableLotteryPage() {
           wheelSubtitle={wheelSubtitle}
           setWheelTitle={setWheelTitle}
           setWheelSubtitle={setWheelSubtitle}
+          wheelTitleEn={wheelTitleEn} setWheelTitleEn={setWheelTitleEn}
+          wheelSubtitleEn={wheelSubtitleEn} setWheelSubtitleEn={setWheelSubtitleEn}
           formTitle={formTitle} setFormTitle={setFormTitle}
           formSubtitle={formSubtitle} setFormSubtitle={setFormSubtitle}
           formButtonText={formButtonText} setFormButtonText={setFormButtonText}
           footerText={footerText} setFooterText={setFooterText}
+          formTitleEn={formTitleEn} setFormTitleEn={setFormTitleEn}
+          formSubtitleEn={formSubtitleEn} setFormSubtitleEn={setFormSubtitleEn}
+          formButtonTextEn={formButtonTextEn} setFormButtonTextEn={setFormButtonTextEn}
+          footerTextEn={footerTextEn} setFooterTextEn={setFooterTextEn}
           formFields={formFields} setFormFields={setFormFields}
         />
       ) : (
@@ -183,10 +232,16 @@ export default function TurntableLotteryPage() {
           setPrizes={setPrizes}
           wheelTitle={wheelTitle}
           wheelSubtitle={wheelSubtitle}
+          wheelTitleEn={wheelTitleEn}
+          wheelSubtitleEn={wheelSubtitleEn}
           formTitle={formTitle}
           formSubtitle={formSubtitle}
           formButtonText={formButtonText}
           footerText={footerText}
+          formTitleEn={formTitleEn}
+          formSubtitleEn={formSubtitleEn}
+          formButtonTextEn={formButtonTextEn}
+          footerTextEn={footerTextEn}
           formFields={formFields}
         />
       )}
@@ -215,25 +270,46 @@ export default function TurntableLotteryPage() {
 // ==========================================
 function UserApp({
   eventId, prizes, setPrizes, wheelTitle, wheelSubtitle,
-  formTitle, formSubtitle, formButtonText, footerText, formFields
+  wheelTitleEn, wheelSubtitleEn,
+  formTitle, formSubtitle, formButtonText, footerText,
+  formTitleEn, formSubtitleEn, formButtonTextEn, footerTextEn,
+  formFields
 }: {
   eventId: string;
   prizes: LuckPrize[];
   setPrizes: React.Dispatch<React.SetStateAction<LuckPrize[]>>;
   wheelTitle: string;
   wheelSubtitle: string;
+  wheelTitleEn: string;
+  wheelSubtitleEn: string;
   formTitle: string;
   formSubtitle: string;
   formButtonText: string;
   footerText: string;
+  formTitleEn: string;
+  formSubtitleEn: string;
+  formButtonTextEn: string;
+  footerTextEn: string;
   formFields: FormField[];
 }) {
-  const [step, setStep] = useState(0); // 0=表单, 1=转盘, 2=凭证
+  const [step, setStep] = useState(0);
   const [isDrawing, setIsDrawing] = useState(false);
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [winnerRecord, setWinnerRecord] = useState<LuckWinner | null>(null);
   const [rotation, setRotation] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
+  const [lang, setLang] = useState<Lang>(() => {
+    try { return (localStorage.getItem('luck_lang') as Lang) || 'zh'; } catch { return 'zh'; }
+  });
+  const t = I18N[lang];
+
+  // 根据语言选择显示内容
+  const displayWheelTitle  = lang === 'en' ? (wheelTitleEn  || wheelTitle)       : wheelTitle;
+  const displayWheelSubt   = lang === 'en' ? (wheelSubtitleEn || wheelSubtitle)   : wheelSubtitle;
+  const displayTitle   = lang === 'en' ? (formTitleEn  || formTitle)       : formTitle;
+  const displaySubt    = lang === 'en' ? (formSubtitleEn || formSubtitle)   : formSubtitle;
+  const displayBtn     = lang === 'en' ? (formButtonTextEn || formButtonText): formButtonText;
+  const displayFooter  = lang === 'en' ? (footerTextEn || footerText)       : footerText;
 
   // 页面加载时检查本地缓存：如果已经抽过奖，直接显示结果
   useEffect(() => {
@@ -266,7 +342,7 @@ function UserApp({
     // 检查手机号是否已抽过
     const dup = await checkPhoneDuplicate(eventId, formData.phone);
     if (dup) {
-      setErrorMsg('该手机号已参与过本次活动');
+      setErrorMsg(t.errDuplicate);
       return;
     }
 
@@ -306,7 +382,7 @@ function UserApp({
         try { localStorage.setItem(`luck_winner_${eventId}`, JSON.stringify(result.winner)); } catch { /* ignore */ }
         setStep(2);
       } else {
-        setErrorMsg(result.error || '抽奖失败，请重试');
+        setErrorMsg(result.error || t.errFail);
       }
       setIsDrawing(false);
     }, SPIN_DURATION);
@@ -317,9 +393,24 @@ function UserApp({
   return (
     <div className="flex flex-col h-screen px-4 relative z-10">
 
+      {/* CN/EN 语言切换 */}
+      <div className="absolute top-4 right-4 z-50">
+        <button
+          onClick={() => {
+            const next: Lang = lang === 'zh' ? 'en' : 'zh';
+            setLang(next);
+            try { localStorage.setItem('luck_lang', next); } catch { /* ignore */ }
+          }}
+          className="flex items-center gap-0 bg-white/80 backdrop-blur-sm border border-[#003cff]/20 rounded-full overflow-hidden text-[11px] font-bold tracking-wider shadow-sm"
+        >
+          <span className={`px-3 py-1.5 transition-all ${ lang === 'zh' ? 'bg-[#003cff] text-white' : 'text-[#94a3b8] hover:text-[#003cff]' }`}>CN</span>
+          <span className={`px-3 py-1.5 transition-all ${ lang === 'en' ? 'bg-[#003cff] text-white' : 'text-[#94a3b8] hover:text-[#003cff]' }`}>EN</span>
+        </button>
+      </div>
+
       {/* 可滚动的主内容区 */}
-      <div className="flex-1 overflow-y-auto flex flex-col items-center justify-center py-8">
-      <div className="w-full max-w-md">
+      <div className="flex-1 overflow-y-auto flex flex-col items-center pt-14 pb-4">
+      <div className="w-full max-w-md my-auto flex-shrink-0">
 
         {/* ── STEP 0: 欧式优雅信息表单 ── */}
         <div className={`transition-all duration-[1000ms] ease-[cubic-bezier(0.16,1,0.3,1)]
@@ -327,29 +418,35 @@ function UserApp({
 
           <div className="text-center space-y-3 mb-8">
             <h1 className="text-3xl sm:text-4xl font-black tracking-wider text-[#1a2332]" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>
-              {formTitle}
+              {displayTitle}
             </h1>
             <div className="flex items-center justify-center gap-2 opacity-60">
               <span className="w-6 h-[1px] bg-[#003cff]" />
-              <p className="text-[#003cff] text-[10px] tracking-[0.15em] uppercase whitespace-nowrap" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>{formSubtitle}</p>
+              <p className="text-[#003cff] text-[10px] tracking-[0.15em] uppercase whitespace-nowrap" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>{displaySubt}</p>
               <span className="w-6 h-[1px] bg-[#003cff]" />
             </div>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5 bg-white/60 backdrop-blur-xl p-8 rounded-2xl border border-[#003cff]/10 retro-shadow">
-            {formFields.filter(f => f.enabled).map((field) => (
-              <div key={field.key} className="relative">
-                <input
-                  type={field.type}
-                  placeholder={field.required ? `${field.label} *` : `${field.label}（选填）`}
-                  value={formData[field.key] || ''}
-                  onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
-                  required={field.required}
-                  className="w-full bg-transparent border-b border-[#003cff]/20 px-4 py-4 outline-none focus:border-[#003cff] transition-all placeholder-[#94a3b8] text-[#1e293b] text-center text-lg"
-                  style={{ fontFamily: '"Playfair Display", Georgia, serif' }}
-                />
-              </div>
-            ))}
+            {formFields.filter(f => f.enabled).map((field) => {
+              const displayLabel = lang === 'en' ? (field.labelEn || field.label) : field.label;
+              const placeholder = field.required
+                ? `${displayLabel} *`
+                : `${displayLabel}${t.optional}`;
+              return (
+                <div key={field.key} className="relative">
+                  <input
+                    type={field.type}
+                    placeholder={placeholder}
+                    value={formData[field.key] || ''}
+                    onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
+                    required={field.required}
+                    className="w-full bg-transparent border-b border-[#003cff]/20 px-4 py-4 outline-none focus:border-[#003cff] transition-all placeholder-[#94a3b8] text-[#1e293b] text-center text-lg"
+                    style={{ fontFamily: '"Playfair Display", Georgia, serif' }}
+                  />
+                </div>
+              );
+            })}
             <button
               type="submit"
               disabled={!isFormValid}
@@ -360,7 +457,7 @@ function UserApp({
               }`}
               style={{ fontFamily: '"Playfair Display", Georgia, serif', boxShadow: isFormValid ? '0 10px 20px rgba(0,60,255,0.2)' : 'none' }}
             >
-              {formButtonText}
+              {displayBtn}
             </button>
             {errorMsg && (
               <p className="text-center text-red-500 text-xs mt-2">{errorMsg}</p>
@@ -373,11 +470,11 @@ function UserApp({
           ${step === 1 ? 'opacity-100 translate-y-0 relative z-10' : 'opacity-0 translate-y-10 absolute pointer-events-none'}`}>
 
           <div className="text-center mb-8">
-            <h2 className="text-2xl font-bold tracking-widest text-[#1a2332]" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>{wheelTitle}</h2>
-            <p className="text-[#003cff]/70 text-xs mt-3 tracking-[0.2em]" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>{wheelSubtitle}</p>
+            <h2 className="text-2xl font-bold tracking-widest text-[#1a2332]" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>{displayWheelTitle}</h2>
+            <p className="text-[#003cff]/70 text-xs mt-3 tracking-[0.2em]" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>{displayWheelSubt}</p>
           </div>
 
-          <div className="flex justify-center relative my-10 scale-[1.15]">
+          <div className="flex justify-center relative my-6 sm:my-8">
 
             {/* 古典精致指针 */}
             <div
@@ -424,7 +521,7 @@ function UserApp({
                         <path id={`text-arc-u-${i}`} d={textArcData} fill="none" />
                         <text fill="#003cff" fontSize="13" fontWeight="bold" letterSpacing="2" fontFamily="Georgia, serif">
                           <textPath href={`#text-arc-u-${i}`} startOffset="50%" textAnchor="middle">
-                            {p.name}
+                            {lang === 'en' ? (p.name_en || p.name) : p.name}
                           </textPath>
                         </text>
                         <g transform={`translate(160,160) rotate(${rotDeg})`}>
@@ -458,7 +555,7 @@ function UserApp({
                   <div className="absolute top-0 left-0 w-full h-1/2 bg-white/20 rounded-t-full pointer-events-none" />
                   <Sparkles className="w-5 h-5 text-white mb-0.5" strokeWidth={1.5} />
                   <span className="text-white text-[9px] tracking-[0.2em] uppercase mt-1" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>
-                    {isDrawing ? '...' : '开始'}
+                    {isDrawing ? t.spinning : t.spinStart}
                   </span>
                 </div>
               </button>
@@ -478,8 +575,8 @@ function UserApp({
                 >
                   <CheckCircle2 className="w-8 h-8 text-[#00cb35]" strokeWidth={1.5} />
                 </div>
-                <h2 className="text-3xl font-black tracking-widest text-[#1a2332]" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>恭喜获奖</h2>
-                <p className="text-[#003cff]/70 text-sm italic tracking-wide" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>请凭此凭证前往展台服务处兑换奖品</p>
+                <h2 className="text-3xl font-black tracking-widest text-[#1a2332]" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>{t.congratsTitle}</h2>
+                <p className="text-[#003cff]/70 text-sm italic tracking-wide" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>{t.congratsSub}</p>
               </div>
 
               {/* 典藏白卡凭证 */}
@@ -492,9 +589,9 @@ function UserApp({
                   <div className="absolute bottom-2 right-2 text-[#003cff]/30 text-lg leading-none" style={{ fontFamily: 'serif' }}>+</div>
 
                   <div className="flex flex-col items-center border-b border-[#003cff]/10 pb-6 mb-6 mt-2">
-                    <p className="text-[#94a3b8] text-[10px] uppercase tracking-[0.3em] mb-3" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>ISLE 2026 · 获奖证明</p>
+                    <p className="text-[#94a3b8] text-[10px] uppercase tracking-[0.3em] mb-3" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>ISLE 2026 · {t.certLabel}</p>
                     <h3 className="text-2xl font-bold text-center text-[#003cff] tracking-wide" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>
-                      {winnerRecord.prize.name}
+                      {lang === 'en' ? (winnerRecord.prize.name_en || winnerRecord.prize.name) : winnerRecord.prize.name}
                     </h3>
                     {winnerRecord.prize.description && (
                       <p className="text-[#94a3b8] text-xs mt-2 italic" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>{winnerRecord.prize.description}</p>
@@ -503,18 +600,18 @@ function UserApp({
 
                   <div className="space-y-4 px-2 text-sm text-[#475569]" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>
                     <div className="flex justify-between items-end border-b border-dashed border-[#e2e8f0] pb-2">
-                      <span className="text-[#94a3b8] text-xs italic">获奖者 Name</span>
+                      <span className="text-[#94a3b8] text-xs italic">{t.winnerName}</span>
                       <span className="font-bold text-[#1e293b] text-base">{winnerRecord.name}</span>
                     </div>
                     <div className="flex justify-between items-end border-b border-dashed border-[#e2e8f0] pb-2">
-                      <span className="text-[#94a3b8] text-xs italic">手机尾号 Phone</span>
+                      <span className="text-[#94a3b8] text-xs italic">{t.winnerPhone}</span>
                       <span className="font-bold text-[#003cff] text-base">{(winnerRecord.phone || '').slice(-4)}</span>
                     </div>
                   </div>
 
                   {/* 真实可扫描二维码区域 */}
                   <div className="mt-8 flex flex-col items-center">
-                    <p className="text-[#94a3b8] text-[9px] uppercase tracking-[0.25em] mb-3" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>扫码核销</p>
+                    <p className="text-[#94a3b8] text-[9px] uppercase tracking-[0.25em] mb-3" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>{t.scanRedeem}</p>
                     <div
                       className="bg-white p-3 border border-[#003cff]/15"
                       style={{ boxShadow: '0 2px 12px rgba(0,60,255,0.08)' }}
@@ -534,7 +631,7 @@ function UserApp({
                         {winnerRecord.redeem_code || winnerRecord.id}
                       </p>
                     </div>
-                    <p className="text-center text-[#c0c8d8] text-[9px] mt-3 tracking-[0.2em] uppercase">请出示此码至展台服务处兑换</p>
+                    <p className="text-center text-[#c0c8d8] text-[9px] mt-3 tracking-[0.2em] uppercase">{t.scanHint}</p>
                   </div>
                 </div>
               </div>
@@ -551,17 +648,17 @@ function UserApp({
           )}
         </div>
       </div>
-      </div>
 
-      {/* 页脚品牌落款 - shrink-0 不护内容 */}
-      <div className="shrink-0 py-4 flex flex-col items-center gap-1.5" style={{ opacity: 0.5 }}>
+      {/* 页脚品牌落款 - 随内容滚动 */}
+      <div className="shrink-0 w-full mt-6 py-4 flex flex-col items-center gap-1.5" style={{ opacity: 0.5 }}>
         <img src="/logo_24.svg" alt="Unilumin" className="h-6" />
         <p
           className="text-[#003cff] text-[9px] tracking-[0.2em] uppercase whitespace-nowrap"
           style={{ fontFamily: '"Playfair Display", Georgia, serif' }}
         >
-          {footerText}
+          {displayFooter}
         </p>
+      </div>
       </div>
     </div>
   );
@@ -573,8 +670,11 @@ function UserApp({
 function AdminApp({
   eventId, prizes, setPrizes, winners, setWinners, onRefresh: _onRefresh,
   wheelTitle, wheelSubtitle, setWheelTitle, setWheelSubtitle,
+  wheelTitleEn, setWheelTitleEn, wheelSubtitleEn, setWheelSubtitleEn,
   formTitle, setFormTitle, formSubtitle, setFormSubtitle,
   formButtonText, setFormButtonText, footerText, setFooterText,
+  formTitleEn, setFormTitleEn, formSubtitleEn, setFormSubtitleEn,
+  formButtonTextEn, setFormButtonTextEn, footerTextEn, setFooterTextEn,
   formFields, setFormFields
 }: {
   eventId: string;
@@ -587,18 +687,24 @@ function AdminApp({
   wheelSubtitle: string;
   setWheelTitle: React.Dispatch<React.SetStateAction<string>>;
   setWheelSubtitle: React.Dispatch<React.SetStateAction<string>>;
+  wheelTitleEn: string; setWheelTitleEn: React.Dispatch<React.SetStateAction<string>>;
+  wheelSubtitleEn: string; setWheelSubtitleEn: React.Dispatch<React.SetStateAction<string>>;
   formTitle: string; setFormTitle: React.Dispatch<React.SetStateAction<string>>;
   formSubtitle: string; setFormSubtitle: React.Dispatch<React.SetStateAction<string>>;
   formButtonText: string; setFormButtonText: React.Dispatch<React.SetStateAction<string>>;
   footerText: string; setFooterText: React.Dispatch<React.SetStateAction<string>>;
+  formTitleEn: string; setFormTitleEn: React.Dispatch<React.SetStateAction<string>>;
+  formSubtitleEn: string; setFormSubtitleEn: React.Dispatch<React.SetStateAction<string>>;
+  formButtonTextEn: string; setFormButtonTextEn: React.Dispatch<React.SetStateAction<string>>;
+  footerTextEn: string; setFooterTextEn: React.Dispatch<React.SetStateAction<string>>;
   formFields: FormField[]; setFormFields: React.Dispatch<React.SetStateAction<FormField[]>>;
 }) {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'prizes' | 'pageConfig'>('dashboard');
   const [searchText, setSearchText] = useState('');
   const [editingPrize, setEditingPrize] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<{ name: string; description: string; quantity: number }>({ name: '', description: '', quantity: 1 });
+  const [editForm, setEditForm] = useState<{ name: string; name_en: string; description: string; quantity: number }>({ name: '', name_en: '', description: '', quantity: 1 });
   const [addingPrize, setAddingPrize] = useState(false);
-  const [newPrize, setNewPrize] = useState({ name: '', description: 'Gift', quantity: 5 });
+  const [newPrize, setNewPrize] = useState({ name: '', name_en: '', description: 'Gift', quantity: 5 });
   const [redeemCodeInput, setRedeemCodeInput] = useState('');
   const [redeemMsg, setRedeemMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -695,7 +801,7 @@ function AdminApp({
   // 开始编辑奖项
   const startEdit = (prize: LuckPrize) => {
     setEditingPrize(prize.id);
-    setEditForm({ name: prize.name, description: prize.description || '', quantity: prize.quantity });
+    setEditForm({ name: prize.name, name_en: prize.name_en || '', description: prize.description || '', quantity: prize.quantity });
   };
 
   // 保存编辑
@@ -707,12 +813,13 @@ function AdminApp({
     const newRemaining = Math.max(0, editForm.quantity - drawn);
     await updatePrize(prizeId, {
       name: editForm.name,
+      name_en: editForm.name_en || null,
       description: editForm.description,
       quantity: editForm.quantity,
       remaining: newRemaining,
     });
     setPrizes(prev => prev.map(p =>
-      p.id === prizeId ? { ...p, name: editForm.name, description: editForm.description, quantity: editForm.quantity, remaining: newRemaining } : p
+      p.id === prizeId ? { ...p, name: editForm.name, name_en: editForm.name_en || null, description: editForm.description, quantity: editForm.quantity, remaining: newRemaining } : p
     ));
     setEditingPrize(null);
   };
@@ -722,13 +829,14 @@ function AdminApp({
     if (!newPrize.name.trim()) return;
     const prize = await createPrize(eventId, {
       name: newPrize.name.trim(),
+      name_en: newPrize.name_en.trim() || null,
       description: newPrize.description || 'Gift',
       quantity: newPrize.quantity,
       sort_order: prizes.length + 1,
     });
     if (prize) {
       setPrizes(prev => [...prev, prize]);
-      setNewPrize({ name: '', description: 'Gift', quantity: 5 });
+      setNewPrize({ name: '', name_en: '', description: 'Gift', quantity: 5 });
       setAddingPrize(false);
     }
   };
@@ -1040,21 +1148,32 @@ function AdminApp({
 
                 {/* 转盘标题配置 */}
                 <div className="bg-white border border-[#e2e8f0] rounded-2xl shadow-sm p-4">
-                  <div className="flex items-end gap-3 flex-wrap">
-                    <div className="flex-1 min-w-[140px] space-y-1">
-                      <label className="text-[11px] text-[#64748b] font-bold">转盘标题</label>
-                      <input type="text" value={wheelTitle} onChange={e => setWheelTitle(e.target.value)} placeholder="展会幸运抽奖"
-                        className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-3 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#0f172a]" />
+                  <p className="text-[10px] text-[#94a3b8] mb-3">每项均支持中英双语，左侧中文 · 右侧英文</p>
+                  <div className="space-y-2 mb-3">
+                    <div>
+                      <label className="text-[11px] text-[#64748b] font-bold block mb-1">转盘标题 / Wheel Title</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input type="text" value={wheelTitle} onChange={e => setWheelTitle(e.target.value)} placeholder="展会幸运抽奖"
+                          className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#0f172a]" />
+                        <input type="text" value={wheelTitleEn} onChange={e => setWheelTitleEn(e.target.value)} placeholder="Lucky Draw"
+                          className="w-full bg-[#f8fafc] border border-[#e2e8f0] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#64748b]" />
+                      </div>
                     </div>
-                    <div className="flex-1 min-w-[140px] space-y-1">
-                      <label className="text-[11px] text-[#64748b] font-bold">副标题</label>
-                      <input type="text" value={wheelSubtitle} onChange={e => setWheelSubtitle(e.target.value)} placeholder="点击中心开始抽奖"
-                        className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-3 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#0f172a]" />
+                    <div>
+                      <label className="text-[11px] text-[#64748b] font-bold block mb-1">副标题 / Subtitle</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input type="text" value={wheelSubtitle} onChange={e => setWheelSubtitle(e.target.value)} placeholder="点击中心开始抽奖"
+                          className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#0f172a]" />
+                        <input type="text" value={wheelSubtitleEn} onChange={e => setWheelSubtitleEn(e.target.value)} placeholder="Tap center to spin"
+                          className="w-full bg-[#f8fafc] border border-[#e2e8f0] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#64748b]" />
+                      </div>
                     </div>
+                  </div>
+                  <div className="flex justify-end">
                     <button
                       onClick={async () => {
                         const ok = await updateProject(eventId, {
-                          settings: { wheelTitle, wheelSubtitle, formTitle, formSubtitle, formButtonText, footerText, formFields }
+                            settings: { wheelTitle, wheelSubtitle, wheelTitleEn, wheelSubtitleEn, formTitle, formSubtitle, formButtonText, footerText, formTitleEn, formSubtitleEn, formButtonTextEn, footerTextEn, formFields }
                         });
                         if (ok) showToast('✅ 已保存');
                       }}
@@ -1071,15 +1190,22 @@ function AdminApp({
                     <h3 className="font-bold text-sm text-[#003cff]">新增奖项</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-3">
-                        <div className="space-y-1">
-                          <label className="text-xs text-[#64748b] font-bold">奖项名称</label>
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-[#64748b] font-bold">奖项名称 <span className="font-normal text-[#94a3b8]">/ Prize Name</span></label>
                           <input
                             type="text"
                             value={newPrize.name}
                             onChange={e => setNewPrize(prev => ({ ...prev, name: e.target.value }))}
-                            placeholder="如：特等奖"
+                            placeholder="中文（如：一等奖）"
                             className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-3 py-2 rounded-lg text-sm outline-none focus:border-[#003cff] focus:ring-2 focus:ring-[#003cff]/10 text-[#0f172a]"
                             autoFocus
+                          />
+                          <input
+                            type="text"
+                            value={newPrize.name_en}
+                            onChange={e => setNewPrize(prev => ({ ...prev, name_en: e.target.value }))}
+                            placeholder="English (e.g. First Prize)"
+                            className="w-full bg-[#f8fafc] border border-[#e2e8f0] px-3 py-2 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#64748b]"
                           />
                         </div>
                         <div className="space-y-1">
@@ -1100,7 +1226,7 @@ function AdminApp({
                     </div>
                     <div className="flex gap-2 justify-end">
                       <button
-                        onClick={() => { setAddingPrize(false); setNewPrize({ name: '', description: 'Gift', quantity: 5 }); }}
+                        onClick={() => { setAddingPrize(false); setNewPrize({ name: '', name_en: '', description: 'Gift', quantity: 5 }); }}
                         className="px-4 py-2 text-sm font-bold text-[#64748b] hover:bg-[#f1f5f9] rounded-lg transition-colors"
                       >
                         取消
@@ -1133,17 +1259,25 @@ function AdminApp({
                                 <Icon className="text-[#003cff] w-5 h-5" />
                               </div>
                               {isEditing ? (
-                                <div>
+                                <div className="flex-1 space-y-1.5">
                                   <input
                                     type="text"
                                     value={editForm.name}
                                     onChange={e => setEditForm(prev => ({ ...prev, name: e.target.value }))}
-                                    className="bg-[#f8fafc] border border-[#cbd5e1] px-2 py-1 rounded-lg text-sm font-bold outline-none focus:border-[#003cff] text-[#0f172a] w-full mb-2"
+                                    placeholder="中文名（如：一等奖）"
+                                    className="bg-[#f8fafc] border border-[#cbd5e1] px-2 py-1 rounded-lg text-sm font-bold outline-none focus:border-[#003cff] text-[#0f172a] w-full"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={editForm.name_en}
+                                    onChange={e => setEditForm(prev => ({ ...prev, name_en: e.target.value }))}
+                                    placeholder="English name (e.g. First Prize)"
+                                    className="bg-[#f8fafc] border border-[#e2e8f0] px-2 py-1 rounded-lg text-xs outline-none focus:border-[#003cff] text-[#64748b] w-full"
                                   />
                                 </div>
                               ) : (
                                 <div>
-                                  <h3 className="text-sm font-bold text-[#0f172a]">{prize.name}</h3>
+                                  <h3 className="text-sm font-bold text-[#0f172a]">{prize.name}{prize.name_en && <span className="text-[#94a3b8] font-normal ml-1.5 text-xs">/ {prize.name_en}</span>}</h3>
                                   <p className="text-xs text-[#64748b] mt-0.5">{iconChoices.find(c => c.key === prize.description)?.label || prize.description || '礼物'}</p>
                                 </div>
                               )}
@@ -1371,7 +1505,7 @@ function AdminApp({
                       <button
                         onClick={async () => {
                           const ok = await updateProject(eventId, {
-                            settings: { wheelTitle, wheelSubtitle, formTitle, formSubtitle, formButtonText, footerText, formFields }
+                              settings: { wheelTitle, wheelSubtitle, formTitle, formSubtitle, formButtonText, footerText, formTitleEn, formSubtitleEn, formButtonTextEn, footerTextEn, formFields }
                           });
                           if (ok) showToast('✅ 配置已保存');
                         }}
@@ -1383,22 +1517,38 @@ function AdminApp({
 
                     {/* 登录页标题配置 */}
                     <div className="bg-white border border-[#e2e8f0] rounded-2xl shadow-sm p-4">
-                      <h3 className="font-bold text-sm text-[#0f172a] mb-3">📋 标题与按钮</h3>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <label className="text-[11px] text-[#64748b] font-bold">主标题</label>
-                          <input type="text" value={formTitle} onChange={e => setFormTitle(e.target.value)} placeholder="光显展区抽奖"
-                            className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-3 py-2 rounded-lg text-sm outline-none focus:border-[#003cff] focus:ring-2 focus:ring-[#003cff]/10 text-[#0f172a]" />
+                      <h3 className="font-bold text-sm text-[#0f172a] mb-1">📋 标题与按钮</h3>
+                      <p className="text-[10px] text-[#94a3b8] mb-3">每项均支持中英双语，切换语言时自动显示对应版本</p>
+                      <div className="space-y-3">
+                        {/* 主标题 */}
+                        <div>
+                          <label className="text-[11px] text-[#64748b] font-bold block mb-1">主标题 / Main Title</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input type="text" value={formTitle} onChange={e => setFormTitle(e.target.value)} placeholder="中文（如：展区抽奖）"
+                              className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#0f172a]" />
+                            <input type="text" value={formTitleEn} onChange={e => setFormTitleEn(e.target.value)} placeholder="English (e.g. Lucky Draw)"
+                              className="w-full bg-[#f8fafc] border border-[#e2e8f0] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#64748b]" />
+                          </div>
                         </div>
-                        <div className="space-y-1">
-                          <label className="text-[11px] text-[#64748b] font-bold">副标题</label>
-                          <input type="text" value={formSubtitle} onChange={e => setFormSubtitle(e.target.value)} placeholder="ISLE 2026 · LED Display Exhibition"
-                            className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-3 py-2 rounded-lg text-sm outline-none focus:border-[#003cff] focus:ring-2 focus:ring-[#003cff]/10 text-[#0f172a]" />
+                        {/* 副标题 */}
+                        <div>
+                          <label className="text-[11px] text-[#64748b] font-bold block mb-1">副标题 / Subtitle</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input type="text" value={formSubtitle} onChange={e => setFormSubtitle(e.target.value)} placeholder="副标题"
+                              className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#0f172a]" />
+                            <input type="text" value={formSubtitleEn} onChange={e => setFormSubtitleEn(e.target.value)} placeholder="English subtitle"
+                              className="w-full bg-[#f8fafc] border border-[#e2e8f0] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#64748b]" />
+                          </div>
                         </div>
-                        <div className="space-y-1 sm:col-span-2">
-                          <label className="text-[11px] text-[#64748b] font-bold">按钮文字</label>
-                          <input type="text" value={formButtonText} onChange={e => setFormButtonText(e.target.value)} placeholder="登记并参与抽奖"
-                            className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-3 py-2 rounded-lg text-sm outline-none focus:border-[#003cff] focus:ring-2 focus:ring-[#003cff]/10 text-[#0f172a]" />
+                        {/* 按钮文字 */}
+                        <div>
+                          <label className="text-[11px] text-[#64748b] font-bold block mb-1">按钮文字 / Button</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input type="text" value={formButtonText} onChange={e => setFormButtonText(e.target.value)} placeholder="登记并参与抽奖"
+                              className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#0f172a]" />
+                            <input type="text" value={formButtonTextEn} onChange={e => setFormButtonTextEn(e.target.value)} placeholder="Register & Draw"
+                              className="w-full bg-[#f8fafc] border border-[#e2e8f0] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#64748b]" />
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1420,14 +1570,23 @@ function AdminApp({
                             >
                               <div className={`absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all ${field.enabled ? 'left-[22px]' : 'left-[3px]'}`} />
                             </button>
-                            {/* 标签编辑 */}
-                            <input
-                              type="text"
-                              value={field.label}
-                              onChange={e => setFormFields(prev => prev.map((f, i) => i === idx ? { ...f, label: e.target.value } : f))}
-                              className="flex-1 bg-transparent border-none outline-none text-sm text-[#0f172a] font-medium min-w-0"
-                              placeholder="字段名称"
-                            />
+                            {/* 标签编辑：中/英 */}
+                            <div className="flex-1 min-w-0 space-y-1">
+                              <input
+                                type="text"
+                                value={field.label}
+                                onChange={e => setFormFields(prev => prev.map((f, i) => i === idx ? { ...f, label: e.target.value } : f))}
+                                className="w-full bg-transparent border-b border-[#003cff]/10 outline-none text-sm text-[#0f172a] font-medium"
+                                placeholder="中文字段名"
+                              />
+                              <input
+                                type="text"
+                                value={field.labelEn || ''}
+                                onChange={e => setFormFields(prev => prev.map((f, i) => i === idx ? { ...f, labelEn: e.target.value } : f))}
+                                className="w-full bg-transparent border-b border-[#e2e8f0] outline-none text-xs text-[#94a3b8]"
+                                placeholder="English label"
+                              />
+                            </div>
                             {/* 必填/选填切换 */}
                             {field.enabled && (
                               field.locked ? (
@@ -1449,10 +1608,14 @@ function AdminApp({
                     {/* 页脚配置 */}
                     <div className="bg-white border border-[#e2e8f0] rounded-2xl shadow-sm p-4">
                       <h3 className="font-bold text-sm text-[#0f172a] mb-3">🏷️ 页脚</h3>
-                      <div className="space-y-1">
-                        <label className="text-[11px] text-[#64748b] font-bold">页脚文字</label>
-                        <input type="text" value={footerText} onChange={e => setFooterText(e.target.value)} placeholder="ISLE 2026 LED光显科技展"
-                          className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-3 py-2 rounded-lg text-sm outline-none focus:border-[#003cff] focus:ring-2 focus:ring-[#003cff]/10 text-[#0f172a]" />
+                      <div>
+                        <label className="text-[11px] text-[#64748b] font-bold block mb-1">页脚文字 / Footer</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input type="text" value={footerText} onChange={e => setFooterText(e.target.value)} placeholder="ISLE 2026 LED光显科技展"
+                            className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#0f172a]" />
+                          <input type="text" value={footerTextEn} onChange={e => setFooterTextEn(e.target.value)} placeholder="ISLE 2026 LED Display Technology"
+                            className="w-full bg-[#f8fafc] border border-[#e2e8f0] px-2.5 py-1.5 rounded-lg text-sm outline-none focus:border-[#003cff] text-[#64748b]" />
+                        </div>
                       </div>
                     </div>
                   </div>

@@ -56,7 +56,7 @@ const LoginPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#0b0a1a] flex items-center justify-center p-4">
+    <div className="h-screen overflow-y-auto bg-[#0b0a1a] flex flex-col items-center p-4">
       {/* 背景 */}
       <div className="fixed inset-0 z-0">
         <div className="absolute top-[-20%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-blue-600/20 filter blur-[120px]" />
@@ -64,7 +64,7 @@ const LoginPage = () => {
       </div>
 
       {/* 登录卡片 */}
-      <div className="relative z-10 w-full max-w-md">
+      <div className="relative z-10 w-full max-w-md my-auto flex-shrink-0">
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="w-20 h-20 mx-auto mb-4 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30">

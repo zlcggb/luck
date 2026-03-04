@@ -60,6 +60,7 @@ export interface LuckPrize {
   id: string;
   event_id: string;
   name: string;
+  name_en: string | null;   // 英文奖项名称
   description: string | null;
   image: string | null;
   quantity: number;
@@ -804,7 +805,7 @@ export const getPrizes = async (eventId: string): Promise<LuckPrize[]> => {
  */
 export const createPrize = async (
   eventId: string,
-  data: { name: string; description?: string; image?: string; quantity?: number; sort_order?: number }
+  data: { name: string; name_en?: string | null; description?: string; image?: string; quantity?: number; sort_order?: number }
 ): Promise<LuckPrize | null> => {
   const quantity = data.quantity || 1;
   const { data: prize, error } = await supabase
@@ -812,6 +813,7 @@ export const createPrize = async (
     .insert({
       event_id: eventId,
       name: data.name,
+      name_en: data.name_en || null,
       description: data.description || null,
       image: data.image || null,
       quantity,
