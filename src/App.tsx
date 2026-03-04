@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, type CSSProperties, type SyntheticEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Play, Square, Trophy, Grid, HelpCircle, Settings, Gift, ChevronRight, X } from 'lucide-react';
 import {
   Participant,
@@ -37,6 +38,17 @@ import SettingsPanel from './components/SettingsPanel';
 import { useModal } from './contexts/ModalContext';
 import { DEFAULT_CUSTOM_THEME, DEFAULT_THEME_ID, getThemeById, paletteToCssVariables } from './theme';
 import {
+  loadProjectSettings,
+  getThemeIdFromSettings,
+  getCustomThemePaletteFromSettings,
+  getAvatarThemeIdFromSettings,
+  getBackgroundMusicFromSettings,
+} from './utils/projectSettings';
+import {
+  getParticipants,
+  getPrizes as getDbPrizes,
+} from './utils/supabaseCheckin';
+import {
   DEFAULT_AVATAR_THEME_ID,
   getAvatarCandidatesForParticipant,
   getAvatarFallbackUrlForParticipant,
@@ -53,9 +65,10 @@ const MOCK_PARTICIPANTS: Participant[] = Array.from({ length: 100 }).map((_, i) 
 
 interface AppProps {
   onOpenCheckInDisplay?: () => void;
+  isAdmin?: boolean;
 }
 
-const App = ({ onOpenCheckInDisplay }: AppProps) => {
+const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
   // 核心状态
   const [participants, setParticipants] = useState<Participant[]>([]); // 所有参与者
   const [prizes, setPrizes] = useState<Prize[]>(DEFAULT_PRIZES);        // 奖项配置
@@ -86,42 +99,91 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
   // 使用内部弹窗
   const { showWarning, showConfirm } = useModal();
 
-  // --- 初始化：从 LocalStorage 加载数据 ---
+  // --- 初始化：优先从数据库加载项目数据，fallback 到 localStorage ---
   const [isInitialized, setIsInitialized] = useState(false);
   const [backgroundMusic, setBackgroundMusic] = useState<BackgroundMusicSettings>(DEFAULT_BACKGROUND_MUSIC);
   const [themeId, setThemeId] = useState<ThemeId>(DEFAULT_THEME_ID);
   const [customThemePalette, setCustomThemePalette] = useState<ThemePalette>(DEFAULT_CUSTOM_THEME);
   const [avatarThemeId, setAvatarThemeId] = useState<AvatarThemeId>(DEFAULT_AVATAR_THEME_ID);
+  const [searchParams] = useSearchParams();
+  const eventId = searchParams.get('event');
   
   useEffect(() => {
-    const savedParticipants = loadParticipants();
-    const savedPrizes = loadPrizes();
-    const savedRecords = loadRecords();
-    const savedExcludedIds = loadExcludedIds();
-    const savedBackgroundMusic = loadBackgroundMusicSettings();
-    const savedThemeId = loadThemeId();
-    const savedCustomThemePalette = loadCustomThemePalette();
-    const savedAvatarThemeId = loadAvatarThemeId();
-    
-    // 如果没有保存的参与者，使用模拟数据
-    setParticipants(savedParticipants.length > 0 ? savedParticipants : MOCK_PARTICIPANTS);
-    setPrizes(savedPrizes);
-    setRecords(savedRecords);
-    setExcludedIds(savedExcludedIds);
-    setBackgroundMusic(savedBackgroundMusic);
-    setThemeId(savedThemeId);
-    setCustomThemePalette(savedCustomThemePalette);
-    setAvatarThemeId(savedAvatarThemeId);
-    
-    // 设置默认选中的奖项
-    if (savedPrizes.length > 0) {
-      const firstUnfinished = savedPrizes.find(p => p.drawn < p.count);
-      setCurrentPrizeId(firstUnfinished?.id || savedPrizes[0].id);
-    }
-    
-    // 标记初始化完成
-    setIsInitialized(true);
-  }, []);
+    const init = async () => {
+      let loadedParticipants: Participant[] = [];
+      let loadedPrizes: Prize[] = DEFAULT_PRIZES;
+
+      // 如果有 eventId，优先从数据库加载
+      if (eventId) {
+        try {
+          // 加载项目设置（主题/音乐/头像）
+          const dbSettings = await loadProjectSettings(eventId);
+          if (dbSettings) {
+            setThemeId(getThemeIdFromSettings(dbSettings));
+            setCustomThemePalette(getCustomThemePaletteFromSettings(dbSettings));
+            setAvatarThemeId(getAvatarThemeIdFromSettings(dbSettings));
+            setBackgroundMusic(getBackgroundMusicFromSettings(dbSettings));
+          }
+
+          // 加载参与者
+          const dbParticipants = await getParticipants(eventId);
+          if (dbParticipants.length > 0) {
+            loadedParticipants = dbParticipants.map(p => ({
+              id: p.employee_id,
+              name: p.name,
+              dept: p.department || '',
+              avatar: p.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.employee_id}`,
+            }));
+          }
+
+          // 加载奖项
+          const dbPrizes = await getDbPrizes(eventId);
+          if (dbPrizes.length > 0) {
+            loadedPrizes = dbPrizes.map(p => ({
+              id: p.id,
+              name: p.name,
+              count: p.quantity,
+              description: p.description || '',
+              drawn: p.quantity - p.remaining,
+              image: p.image || undefined,
+            }));
+          }
+        } catch (err) {
+          console.error('从数据库加载项目数据失败，回退到 localStorage:', err);
+        }
+      }
+
+      // Fallback: 如果数据库没有数据，从 localStorage 加载
+      if (loadedParticipants.length === 0) {
+        const saved = loadParticipants();
+        loadedParticipants = saved.length > 0 ? saved : MOCK_PARTICIPANTS;
+      }
+      if (!eventId) {
+        // 无项目 ID 时从 localStorage 加载设置
+        setBackgroundMusic(loadBackgroundMusicSettings());
+        setThemeId(loadThemeId());
+        setCustomThemePalette(loadCustomThemePalette());
+        setAvatarThemeId(loadAvatarThemeId());
+        loadedPrizes = loadPrizes();
+      }
+
+      setParticipants(loadedParticipants);
+      setPrizes(loadedPrizes);
+      setRecords(loadRecords());
+      setExcludedIds(loadExcludedIds());
+      
+      // 设置默认选中的奖项
+      if (loadedPrizes.length > 0) {
+        const firstUnfinished = loadedPrizes.find(p => p.drawn < p.count);
+        setCurrentPrizeId(firstUnfinished?.id || loadedPrizes[0].id);
+      }
+      
+      // 标记初始化完成
+      setIsInitialized(true);
+    };
+
+    init();
+  }, [eventId]);
 
   // --- 持久化数据（只在初始化完成后才保存） ---
   useEffect(() => {
@@ -586,16 +648,20 @@ const App = ({ onOpenCheckInDisplay }: AppProps) => {
               )}
             </div>
 
-             {/* 设置按钮 */}
-             <div className="h-8 w-[1px] bg-white/10 hidden md:block"></div>
-             
-             <button 
-               onClick={() => setSettingsOpen(true)} 
-               className="p-2 md:p-3 bg-white/5 hover:bg-white/10 rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-text-strong)] border border-white/5 transition-all hover:rotate-90 hover:shadow-[0_0_15px_rgba(255,255,255,0.1)] shrink-0"
-               title="设置"
-             >
-               <Settings size={18} className="md:w-5 md:h-5" />
-             </button>
+             {/* 设置按钮 - 仅管理员可见 */}
+             {isAdmin && (
+               <>
+               <div className="h-8 w-[1px] bg-white/10 hidden md:block"></div>
+              
+               <button 
+                 onClick={() => setSettingsOpen(true)} 
+                 className="p-2 md:p-3 bg-white/5 hover:bg-white/10 rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-text-strong)] border border-white/5 transition-all hover:rotate-90 hover:shadow-[0_0_15px_rgba(255,255,255,0.1)] shrink-0"
+                 title="设置"
+               >
+                 <Settings size={18} className="md:w-5 md:h-5" />
+               </button>
+               </>
+             )}
           </div>
         </header>
 

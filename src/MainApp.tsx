@@ -23,15 +23,18 @@ const TurntableAdminWrapper = () => {
 
 /**
  * 抽奖页面包装器 - 提供导航功能
+ * mode=admin 时显示设置按钮，普通用户访问不显示
  */
 const LotteryPageWrapper = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const eventId = searchParams.get('event');
+  const isAdmin = searchParams.get('mode') === 'admin';
   
   return (
     <LotteryApp 
       onOpenCheckInDisplay={() => navigate(eventId ? `/display?event=${eventId}` : '/display')}
+      isAdmin={isAdmin}
     />
   );
 };
@@ -47,6 +50,7 @@ const DisplayPageWrapper = () => {
   return (
     <CheckInDisplayPage 
       onBack={() => navigate(eventId ? `/lottery?event=${eventId}` : '/lottery')}
+      eventId={eventId}
     />
   );
 };

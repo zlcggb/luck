@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { 
   QrCode, 
@@ -23,15 +24,17 @@ import {
   LuckEvent,
   LuckCheckIn,
   getActiveEvent,
+  getEvent,
   getCheckInRecords,
   getCheckInCount,
+  getParticipantCount,
   subscribeToCheckIns,
   startCheckInSession,
   endCheckInSession,
   getCheckInSessionStatus
 } from '../utils/supabaseCheckin';
 import { CheckInSettings } from '../types/checkin';
-import { loadCheckInSettings, calculateStats } from '../utils/checkinStorage';
+import { loadCheckInSettings } from '../utils/checkinStorage';
 
 import CheckInStats from '../components/checkin/CheckInStats';
 import RealtimeFeed from '../components/checkin/RealtimeFeed';
@@ -66,13 +69,19 @@ const DURATION_OPTIONS = [
 
 interface CheckInDisplayPageProps {
   onBack?: () => void;
+  eventId?: string | null;
 }
 
 /**
  * 签到大屏展示页面
  * 连接 Supabase 数据库，实时展示签到动态
  */
-const CheckInDisplayPage = ({ onBack }: CheckInDisplayPageProps) => {
+const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPageProps) => {
+  // 从 URL 读取 event 参数（fallback）
+  const [searchParams] = useSearchParams();
+  const urlEventId = searchParams.get('event');
+  // 优先使用 prop 传入的，其次用 URL 参数
+  const targetEventId = propEventId || urlEventId;
   // 状态
   const [event, setEvent] = useState<LuckEvent | null>(null);
   const [records, setRecords] = useState<LuckCheckIn[]>([]);
@@ -122,8 +131,15 @@ const CheckInDisplayPage = ({ onBack }: CheckInDisplayPageProps) => {
       const savedSettings = loadCheckInSettings();
       setSettings(savedSettings);
       
-      // 获取活动信息
-      const activeEvent = await getActiveEvent();
+      // 获取活动信息：优先使用 eventId 参数，否则获取全局 active 活动
+      let activeEvent: LuckEvent | null = null;
+      if (targetEventId) {
+        activeEvent = await getEvent(targetEventId);
+      }
+      if (!activeEvent) {
+        activeEvent = await getActiveEvent();
+      }
+      
       if (activeEvent) {
         setEvent(activeEvent);
         
@@ -133,10 +149,12 @@ const CheckInDisplayPage = ({ onBack }: CheckInDisplayPageProps) => {
         
         // 获取签到人数
         const count = await getCheckInCount(activeEvent.id);
-        // setCheckInCount(count) removed
+        
+        // 从数据库获取参与者总数
+        const totalCount = await getParticipantCount(activeEvent.id);
         
         // 更新统计
-        updateStats(checkIns, count);
+        updateStats(checkIns, count, totalCount || 100);
         
         // 检查签到会话状态
         const sessionStatus = await getCheckInSessionStatus(activeEvent.id);
@@ -151,7 +169,7 @@ const CheckInDisplayPage = ({ onBack }: CheckInDisplayPageProps) => {
     };
 
     init();
-  }, []);
+  }, [targetEventId]);
 
   // 倒计时逻辑
   useEffect(() => {
@@ -217,8 +235,8 @@ const CheckInDisplayPage = ({ onBack }: CheckInDisplayPageProps) => {
   };
 
   // 更新统计数据
-  const updateStats = (checkIns: LuckCheckIn[], count: number) => {
-    const localStats = calculateStats();
+  const updateStats = (checkIns: LuckCheckIn[], count: number, totalParticipants?: number) => {
+    const total = totalParticipants || stats.totalParticipants || 100;
     
     // 按部门统计
     const deptMap = new Map<string, { total: number; checkedIn: number }>();
@@ -231,17 +249,17 @@ const CheckInDisplayPage = ({ onBack }: CheckInDisplayPageProps) => {
       deptMap.get(dept)!.total++;
     });
 
-    const departmentStats = Array.from(deptMap.entries()).map(([department, stats]) => ({
+    const departmentStats = Array.from(deptMap.entries()).map(([department, deptStats]) => ({
       department,
-      total: stats.total,
-      checkedIn: stats.checkedIn,
+      total: deptStats.total,
+      checkedIn: deptStats.checkedIn,
       percentage: 100,
     })).sort((a, b) => b.checkedIn - a.checkedIn);
 
     setStats({
-      totalParticipants: localStats.totalParticipants || 100,
+      totalParticipants: total,
       checkedInCount: count,
-      checkInPercentage: Math.round((count / (localStats.totalParticipants || 100)) * 100),
+      checkInPercentage: Math.round((count / total) * 100),
       departmentStats,
       lastCheckInTime: checkIns.length > 0 ? checkIns[0].check_in_time : undefined,
     });
@@ -330,9 +348,9 @@ const CheckInDisplayPage = ({ onBack }: CheckInDisplayPageProps) => {
     setRecords(checkIns);
     
     const count = await getCheckInCount(event.id);
-    // setCheckInCount(count) removed
+    const totalCount = await getParticipantCount(event.id);
     
-    updateStats(checkIns, count);
+    updateStats(checkIns, count, totalCount || undefined);
   };
 
   // 复制链接

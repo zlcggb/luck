@@ -20,8 +20,6 @@ import {
 import { 
   importParticipants,
   addParticipant,
-  getParticipantCount,
-  getCheckInCount,
   LuckEvent,
   getUserProjects,
   createProject,
@@ -144,7 +142,7 @@ const SettingsPanel = ({
   const LAST_EVENT_KEY = 'luck_last_event_id';
 
   // 加载项目列表 - 混合关联策略
-  // 优先级：1. 登录用户项目 → 2. URL参数 → 3. LocalStorage缓存 → 4. 全局活跃活动
+  // 优先级：1. 父组件传入的 currentEventId → 2. URL参数 → 3. LocalStorage缓存 → 4. 全局活跃活动
   const loadProjects = async () => {
     setLoadingProjects(true);
     try {
@@ -166,12 +164,20 @@ const SettingsPanel = ({
         }
       }
       
+      // 最高优先级：父组件传入的 currentEventId（来自路由参数）
+      if (currentEventId) {
+        preferredEventId = currentEventId;
+        console.log('🎯 使用父组件传入的活动ID:', currentEventId);
+      }
+      
       // 策略2：检查 URL 参数中的 event ID
-      const urlParams = new URLSearchParams(window.location.search);
-      const urlEventId = urlParams.get('event');
-      if (urlEventId) {
-        preferredEventId = urlEventId;
-        console.log('📍 从URL参数获取活动ID:', urlEventId);
+      if (!preferredEventId) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlEventId = urlParams.get('event');
+        if (urlEventId) {
+          preferredEventId = urlEventId;
+          console.log('📍 从URL参数获取活动ID:', urlEventId);
+        }
       }
       
       // 策略3：检查 LocalStorage 中缓存的上次活动
@@ -209,14 +215,17 @@ const SettingsPanel = ({
         finalSelectedId = availableProjects[0].id;
       }
       
-      // 更新选中状态
-      if (finalSelectedId && finalSelectedId !== selectedProjectId) {
+      // 更新选中状态 — 仅当确实需要切换时才触发 onEventChange
+      if (finalSelectedId) {
         setSelectedProjectId(finalSelectedId);
-        onEventChange?.(finalSelectedId);
         // 持久化到 LocalStorage
         localStorage.setItem(LAST_EVENT_KEY, finalSelectedId);
+        // 仅当与父组件的 currentEventId 不同时才通知导航（避免循环跳转）
+        if (finalSelectedId !== currentEventId) {
+          onEventChange?.(finalSelectedId);
+        }
         console.log('✅ 已关联活动:', finalSelectedId);
-      } else if (!finalSelectedId) {
+      } else {
         setSelectedProjectId(null);
         localStorage.removeItem(LAST_EVENT_KEY);
       }
@@ -301,25 +310,14 @@ const SettingsPanel = ({
   useEffect(() => {
     if (isOpen) {
       loadProjects();
-      loadCheckInData();
     }
   }, [isOpen]);
 
-  // 当选中项目变化时加载数据
+  // 当选中项目变化时加载数据（包括签到统计）
   useEffect(() => {
-    const loadEventData = async () => {
-      if (selectedProjectId) {
-        const dbCount = await getParticipantCount(selectedProjectId);
-        const checkInCount = await getCheckInCount(selectedProjectId);
-        setCheckInStats(prev => ({ 
-          ...prev, 
-          dbParticipantCount: dbCount,
-          checkedInCount: checkInCount,
-          checkInPercentage: dbCount > 0 ? Math.round((checkInCount / dbCount) * 100) : 0
-        }));
-      }
-    };
-    loadEventData();
+    if (selectedProjectId) {
+      loadCheckInData();
+    }
   }, [selectedProjectId]);
 
   // 处理文件选择
@@ -569,11 +567,32 @@ const SettingsPanel = ({
   };
 
   // 签到数据
-  const loadCheckInData = () => {
+  const loadCheckInData = async () => {
     const settings = loadCheckInSettings();
     setCheckInSettings(settings);
-    const stats = calculateStats();
-    setCheckInStats({ checkedInCount: stats.checkedInCount, checkInPercentage: stats.checkInPercentage, dbParticipantCount: 0 });
+
+    // 优先从数据库获取签到统计
+    if (selectedProjectId) {
+      try {
+        const { getCheckInCount, getParticipantCount } = await import('../utils/supabaseCheckin');
+        const checkedInCount = await getCheckInCount(selectedProjectId);
+        const totalParticipants = await getParticipantCount(selectedProjectId);
+        const total = totalParticipants || participants.length || 1;
+        setCheckInStats({
+          checkedInCount,
+          checkInPercentage: Math.round((checkedInCount / total) * 100),
+          dbParticipantCount: totalParticipants,
+        });
+      } catch (err) {
+        console.error('从数据库获取签到统计失败:', err);
+        // fallback 到本地
+        const stats = calculateStats();
+        setCheckInStats({ checkedInCount: stats.checkedInCount, checkInPercentage: stats.checkInPercentage, dbParticipantCount: 0 });
+      }
+    } else {
+      const stats = calculateStats();
+      setCheckInStats({ checkedInCount: stats.checkedInCount, checkInPercentage: stats.checkInPercentage, dbParticipantCount: 0 });
+    }
   };
 
   const updateCheckInSettings = (updates: Partial<CheckInSettings>) => {

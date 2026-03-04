@@ -30,15 +30,15 @@ import {
   loadPrizes,
   saveRecords,
   loadRecords,
-  loadBackgroundMusicSettings,
-  saveBackgroundMusicSettings,
-  loadThemeId,
-  saveThemeId,
-  loadCustomThemePalette,
-  saveCustomThemePalette,
-  loadAvatarThemeId,
-  saveAvatarThemeId,
 } from '../utils/storage';
+import {
+  loadProjectSettings,
+  getThemeIdFromSettings,
+  getCustomThemePaletteFromSettings,
+  getAvatarThemeIdFromSettings,
+  getBackgroundMusicFromSettings,
+  saveProjectSettings,
+} from '../utils/projectSettings';
 import { DEFAULT_CUSTOM_THEME, DEFAULT_THEME_ID, getThemeById, paletteToCssVariables } from '../theme';
 import { DEFAULT_AVATAR_THEME_ID } from '../avatarTheme';
 
@@ -67,6 +67,11 @@ const ProjectSettingsPage = () => {
   const [avatarThemeId, setAvatarThemeId] = useState<AvatarThemeId>(DEFAULT_AVATAR_THEME_ID);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  // 标记是否已从数据库初始化设置（防止初始值触发保存）
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  // 防抖 timer
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // 初始化
   useEffect(() => {
     if (projectId) {
@@ -74,28 +79,22 @@ const ProjectSettingsPage = () => {
     }
   }, [projectId]);
 
+  // 设置变更时同步到数据库（防抖 800ms）
   useEffect(() => {
-    setBackgroundMusic(loadBackgroundMusicSettings());
-    setThemeId(loadThemeId());
-    setCustomThemePalette(loadCustomThemePalette());
-    setAvatarThemeId(loadAvatarThemeId());
-  }, []);
-
-  useEffect(() => {
-    saveBackgroundMusicSettings(backgroundMusic);
-  }, [backgroundMusic]);
-
-  useEffect(() => {
-    saveThemeId(themeId);
-  }, [themeId]);
-
-  useEffect(() => {
-    saveCustomThemePalette(customThemePalette);
-  }, [customThemePalette]);
-
-  useEffect(() => {
-    saveAvatarThemeId(avatarThemeId);
-  }, [avatarThemeId]);
+    if (!settingsLoaded || !projectId) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveProjectSettings(projectId, {
+        themeId,
+        customThemePalette,
+        avatarThemeId,
+        backgroundMusic,
+      });
+    }, 800);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [themeId, customThemePalette, avatarThemeId, backgroundMusic, settingsLoaded, projectId]);
 
   useEffect(() => {
     if (backgroundMusic.src) return;
@@ -120,6 +119,17 @@ const ProjectSettingsPage = () => {
         return;
       }
       setProject(projectData);
+      
+      // 从数据库 settings 字段加载项目级配置
+      const dbSettings = await loadProjectSettings(projectId);
+      if (dbSettings) {
+        setThemeId(getThemeIdFromSettings(dbSettings));
+        setCustomThemePalette(getCustomThemePaletteFromSettings(dbSettings));
+        setAvatarThemeId(getAvatarThemeIdFromSettings(dbSettings));
+        setBackgroundMusic(getBackgroundMusicFromSettings(dbSettings));
+      }
+      // 标记设置已加载，后续变更才触发同步
+      setSettingsLoaded(true);
       
       // 加载参与者
       const participantList = await getParticipants(projectId);
@@ -356,14 +366,14 @@ const ProjectSettingsPage = () => {
                   <span className="hidden sm:inline">设置</span>
                 </button>
                 <button
-                  onClick={() => navigate(`/lottery?event=${projectId}`)}
+                  onClick={() => window.open(`/lottery?event=${projectId}&mode=admin`, '_blank')}
                   className="flex items-center gap-2 px-5 py-2.5 bg-white text-black rounded-2xl font-bold tracking-wide hover:shadow-[0_4px_30px_rgba(255,255,255,0.4)] transition-all active:scale-[0.98]"
                 >
                   <Play size={18} />
                   <span className="hidden sm:inline">大屏开奖</span>
                 </button>
                 <button
-                  onClick={() => navigate(`/display?event=${projectId}`)}
+                  onClick={() => window.open(`/display?event=${projectId}`, '_blank')}
                   className="flex items-center gap-2 px-5 py-2.5 apple-glass hover:bg-white/10 rounded-2xl font-semibold tracking-wide transition-all active:scale-[0.98]"
                 >
                   <Eye size={18} />
@@ -374,14 +384,14 @@ const ProjectSettingsPage = () => {
               /* 转盘式顶部按钮 */
               <>
                 <button
-                  onClick={() => navigate(`/lottery/wheel?event=${projectId}`)}
+                  onClick={() => window.open(`/lottery/wheel?event=${projectId}`, '_blank')}
                   className="flex items-center gap-2 px-5 py-2.5 apple-glass hover:bg-white/10 rounded-2xl transition-all text-sm font-semibold tracking-wide"
                 >
                   <Eye size={18} />
                   <span className="hidden sm:inline">预览抽奖</span>
                 </button>
                 <button
-                  onClick={() => navigate(`/lottery/wheel/admin?event=${projectId}&mode=admin`)}
+                  onClick={() => window.open(`/lottery/wheel/admin?event=${projectId}&mode=admin`, '_blank')}
                   className="flex items-center gap-2 px-5 py-2.5 bg-white text-black rounded-2xl font-bold tracking-wide hover:shadow-[0_4px_30px_rgba(255,255,255,0.4)] transition-all active:scale-[0.98]"
                 >
                   <Play size={18} />
@@ -472,14 +482,14 @@ const ProjectSettingsPage = () => {
                 <p className="text-xs text-white/50 tracking-wide leading-relaxed">管理并控制所有奖品库存状态</p>
               </button>
               <button
-                onClick={() => navigate(`/lottery?event=${projectId}`)}
+                onClick={() => window.open(`/lottery?event=${projectId}&mode=admin`, '_blank')}
                 className="p-6 bg-white hover:bg-gray-100 rounded-3xl border border-white/10 transition-all text-left group shadow-[0_4px_30px_rgba(255,255,255,0.25)]"
               >
                 <p className="font-bold text-[17px] text-black mb-2">🎲 大屏开奖</p>
                 <p className="text-xs text-gray-600 font-medium tracking-wide leading-relaxed">全屏演示模式下的轮动式抽奖</p>
               </button>
               <button
-                onClick={() => navigate(`/display?event=${projectId}`)}
+                onClick={() => window.open(`/display?event=${projectId}`, '_blank')}
                 className="p-6 apple-glass hover:bg-white/10 rounded-3xl transition-all text-left group"
               >
                 <p className="font-bold text-[17px] mb-2 group-hover:text-amber-400 transition-colors">签到看板</p>
@@ -490,14 +500,14 @@ const ProjectSettingsPage = () => {
             /* ── 转盘式操作面板 ── */
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
               <button
-                onClick={() => navigate(`/lottery/wheel?event=${projectId}`)}
+                onClick={() => window.open(`/lottery/wheel?event=${projectId}`, '_blank')}
                 className="p-6 bg-white hover:bg-gray-100 rounded-3xl border border-white/10 transition-all text-left group shadow-[0_4px_30px_rgba(255,255,255,0.25)]"
               >
                 <p className="font-bold text-[17px] text-black mb-2">🎰 预览转盘</p>
                 <p className="text-xs text-gray-600 font-medium tracking-wide leading-relaxed">查看用户扫码后看到的转盘抽奖页面</p>
               </button>
               <button
-                onClick={() => navigate(`/lottery/wheel/admin?event=${projectId}&mode=admin`)}
+                onClick={() => window.open(`/lottery/wheel/admin?event=${projectId}&mode=admin`, '_blank')}
                 className="p-6 apple-glass hover:bg-white/10 rounded-3xl transition-all text-left group border border-blue-500/20"
               >
                 <p className="font-bold text-[17px] mb-2 group-hover:text-blue-400 transition-colors">📊 管理后台</p>
