@@ -985,7 +985,7 @@ const generateRedeemCode = (): string => {
 export const wheelDraw = async (
   eventId: string,
   prizeId: string,
-  user: { name: string; phone: string; company?: string }
+  user: Record<string, string>
 ): Promise<{ success: boolean; winner?: LuckWinner; error?: string }> => {
   // 1. 检查库存
   const { data: prize } = await supabase
@@ -1005,19 +1005,28 @@ export const wheelDraw = async (
     return { success: false, error: '系统繁忙，请重试' };
   }
 
-  // 3. 写入中奖记录
+  // 3. 分离已知列 vs 额外字段
+  const knownKeys = ['name', 'phone', 'company', 'department', 'employee_id'];
+  const extraInfo: Record<string, string> = {};
+  for (const [k, v] of Object.entries(user)) {
+    if (!knownKeys.includes(k) && v) extraInfo[k] = v;
+  }
+
+  // 4. 写入中奖记录
   const redeemCode = generateRedeemCode();
   const { data: winner, error: winError } = await supabase
     .from('luck_winners')
     .insert({
       event_id: eventId,
       prize_id: prizeId,
-      employee_id: user.phone, // 用手机号作为唯一标识
+      employee_id: user.employee_id || user.phone, // 用工号或手机号作为唯一标识
       name: user.name,
       phone: user.phone,
       company: user.company || null,
+      department: user.department || null,
       redeem_code: redeemCode,
       status: 'pending',
+      extra_info: Object.keys(extraInfo).length > 0 ? extraInfo : null,
     })
     .select('*, prize:luck_prizes(*)')
     .single();

@@ -47,8 +47,36 @@ const IconMap: Record<string, LucideIcon> = {
   Smartphone, Headphones, ShoppingBag, Coffee, Gift, Hexagon,
 };
 
-
 const SPIN_DURATION = 6000;
+
+// 表单字段配置类型
+type FormField = {
+  key: string;       // 对应 formData / luck_winners 的字段名
+  label: string;     // 占位符 / 显示标签
+  type: 'text' | 'tel' | 'email'; // 输入类型
+  required: boolean; // 是否必填
+  enabled: boolean;  // 是否启用（显示）
+  locked: boolean;   // 是否锁定（不可关闭）
+};
+
+const DEFAULT_FORM_FIELDS: FormField[] = [
+  // 基础联系信息（必填核心）
+  { key: 'name',        label: '您的姓名',           type: 'text',  required: true,  enabled: true,  locked: true },
+  { key: 'phone',       label: '手机号码',           type: 'tel',   required: true,  enabled: true,  locked: true },
+  // 扩展联系方式
+  { key: 'company',     label: '所在公司',           type: 'text',  required: false, enabled: true,  locked: false },
+  { key: 'email',       label: '邮箱',               type: 'email', required: false, enabled: false, locked: false },
+  { key: 'wechat',      label: '微信号',             type: 'text',  required: false, enabled: false, locked: false },
+  // 身份信息
+  { key: 'department',  label: '部门',               type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'job_title',   label: '职位',               type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'employee_id', label: '工号',               type: 'text',  required: false, enabled: false, locked: false },
+  // 需求意向
+  { key: 'interest',    label: '感兴趣的产品/方案',  type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'scenario',    label: '应用场景',           type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'need_contact',label: '是否需要专人联系',   type: 'text',  required: false, enabled: false, locked: false },
+  { key: 'remark',      label: '备注',               type: 'text',  required: false, enabled: false, locked: false },
+];
 
 // ==========================================
 // 主入口
@@ -67,6 +95,7 @@ export default function TurntableLotteryPage() {
   const [formSubtitle, setFormSubtitle] = useState('ISLE 2026 · LED Display Exhibition');
   const [formButtonText, setFormButtonText] = useState('登记并参与抽奖');
   const [footerText, setFooterText] = useState('ISLE 2026 LED光显科技展');
+  const [formFields, setFormFields] = useState<FormField[]>(DEFAULT_FORM_FIELDS);
 
   // 从 Supabase 加载奖品和中奖记录
   const refreshData = async () => {
@@ -86,6 +115,14 @@ export default function TurntableLotteryPage() {
       if (s.formSubtitle) setFormSubtitle(s.formSubtitle as string);
       if (s.formButtonText) setFormButtonText(s.formButtonText as string);
       if (s.footerText) setFooterText(s.footerText as string);
+      if (Array.isArray(s.formFields)) {
+        // Merge saved fields with defaults to handle new fields added later
+        const saved = s.formFields as FormField[];
+        setFormFields(DEFAULT_FORM_FIELDS.map(df => {
+          const sf = saved.find(f => f.key === df.key);
+          return sf ? { ...df, ...sf, locked: df.locked } : df;
+        }));
+      }
     }
     setLoading(false);
   };
@@ -137,6 +174,7 @@ export default function TurntableLotteryPage() {
           formSubtitle={formSubtitle} setFormSubtitle={setFormSubtitle}
           formButtonText={formButtonText} setFormButtonText={setFormButtonText}
           footerText={footerText} setFooterText={setFooterText}
+          formFields={formFields} setFormFields={setFormFields}
         />
       ) : (
         <UserApp
@@ -149,6 +187,7 @@ export default function TurntableLotteryPage() {
           formSubtitle={formSubtitle}
           formButtonText={formButtonText}
           footerText={footerText}
+          formFields={formFields}
         />
       )}
 
@@ -176,7 +215,7 @@ export default function TurntableLotteryPage() {
 // ==========================================
 function UserApp({
   eventId, prizes, setPrizes, wheelTitle, wheelSubtitle,
-  formTitle, formSubtitle, formButtonText, footerText
+  formTitle, formSubtitle, formButtonText, footerText, formFields
 }: {
   eventId: string;
   prizes: LuckPrize[];
@@ -187,19 +226,41 @@ function UserApp({
   formSubtitle: string;
   formButtonText: string;
   footerText: string;
+  formFields: FormField[];
 }) {
   const [step, setStep] = useState(0); // 0=表单, 1=转盘, 2=凭证
   const [isDrawing, setIsDrawing] = useState(false);
-  const [formData, setFormData] = useState({ name: '', phone: '', company: '' });
+  const [formData, setFormData] = useState<Record<string, string>>({});
   const [winnerRecord, setWinnerRecord] = useState<LuckWinner | null>(null);
   const [rotation, setRotation] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // 页面加载时检查本地缓存：如果已经抽过奖，直接显示结果
+  useEffect(() => {
+    try {
+      const cached = localStorage.getItem(`luck_winner_${eventId}`);
+      if (cached) {
+        const parsed = JSON.parse(cached) as LuckWinner;
+        if (parsed && parsed.id) {
+          setWinnerRecord(parsed);
+          setStep(2);
+        }
+      }
+    } catch { /* ignore */ }
+  }, [eventId]);
+
   const availablePrizes = useMemo(() => prizes.filter(p => p.remaining > 0), [prizes]);
+
+  // 检查必填字段是否都已填写
+  const isFormValid = useMemo(() => {
+    return formFields
+      .filter(f => f.enabled && f.required)
+      .every(f => (formData[f.key] || '').trim().length > 0);
+  }, [formData, formFields]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.phone) return;
+    if (!isFormValid) return;
     setErrorMsg('');
 
     // 检查手机号是否已抽过
@@ -233,11 +294,7 @@ function UserApp({
 
     setTimeout(async () => {
       // 原子操作：扣减库存 + 写入中奖记录
-      const result = await wheelDraw(eventId, selectedPrize.id, {
-        name: formData.name,
-        phone: formData.phone,
-        company: formData.company,
-      });
+      const result = await wheelDraw(eventId, selectedPrize.id, formData);
 
       if (result.success && result.winner) {
         // 刷新本地奖品库存
@@ -245,6 +302,8 @@ function UserApp({
           p.id === selectedPrize.id ? { ...p, remaining: Math.max(0, p.remaining - 1) } : p
         ));
         setWinnerRecord(result.winner);
+        // 缓存到本地，下次访问直接显示结果
+        try { localStorage.setItem(`luck_winner_${eventId}`, JSON.stringify(result.winner)); } catch { /* ignore */ }
         setStep(2);
       } else {
         setErrorMsg(result.error || '抽奖失败，请重试');
@@ -278,14 +337,14 @@ function UserApp({
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5 bg-white/60 backdrop-blur-xl p-8 rounded-2xl border border-[#003cff]/10 retro-shadow">
-            {(['name', 'phone', 'company'] as const).map((field) => (
-              <div key={field} className="relative">
+            {formFields.filter(f => f.enabled).map((field) => (
+              <div key={field.key} className="relative">
                 <input
-                  type={field === 'phone' ? 'tel' : 'text'}
-                  placeholder={{ name: '您的姓名', phone: '手机号码', company: '所在公司（选填）' }[field]}
-                  value={formData[field]}
-                  onChange={(e) => setFormData({ ...formData, [field]: e.target.value })}
-                  required={field !== 'company'}
+                  type={field.type}
+                  placeholder={field.required ? `${field.label} *` : `${field.label}（选填）`}
+                  value={formData[field.key] || ''}
+                  onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
+                  required={field.required}
                   className="w-full bg-transparent border-b border-[#003cff]/20 px-4 py-4 outline-none focus:border-[#003cff] transition-all placeholder-[#94a3b8] text-[#1e293b] text-center text-lg"
                   style={{ fontFamily: '"Playfair Display", Georgia, serif' }}
                 />
@@ -293,8 +352,13 @@ function UserApp({
             ))}
             <button
               type="submit"
-              className="w-full relative overflow-hidden bg-[#003cff] text-white tracking-[0.2em] py-4 rounded mt-8 hover:bg-[#0028aa] active:scale-[0.98] transition-all"
-              style={{ fontFamily: '"Playfair Display", Georgia, serif', boxShadow: '0 10px 20px rgba(0,60,255,0.2)' }}
+              disabled={!isFormValid}
+              className={`w-full relative overflow-hidden tracking-[0.2em] py-4 rounded mt-8 transition-all ${
+                isFormValid
+                  ? 'bg-[#003cff] text-white hover:bg-[#0028aa] active:scale-[0.98]'
+                  : 'bg-[#cbd5e1] text-white/70 cursor-not-allowed'
+              }`}
+              style={{ fontFamily: '"Playfair Display", Georgia, serif', boxShadow: isFormValid ? '0 10px 20px rgba(0,60,255,0.2)' : 'none' }}
             >
               {formButtonText}
             </button>
@@ -510,7 +574,8 @@ function AdminApp({
   eventId, prizes, setPrizes, winners, setWinners, onRefresh: _onRefresh,
   wheelTitle, wheelSubtitle, setWheelTitle, setWheelSubtitle,
   formTitle, setFormTitle, formSubtitle, setFormSubtitle,
-  formButtonText, setFormButtonText, footerText, setFooterText
+  formButtonText, setFormButtonText, footerText, setFooterText,
+  formFields, setFormFields
 }: {
   eventId: string;
   prizes: LuckPrize[];
@@ -526,6 +591,7 @@ function AdminApp({
   formSubtitle: string; setFormSubtitle: React.Dispatch<React.SetStateAction<string>>;
   formButtonText: string; setFormButtonText: React.Dispatch<React.SetStateAction<string>>;
   footerText: string; setFooterText: React.Dispatch<React.SetStateAction<string>>;
+  formFields: FormField[]; setFormFields: React.Dispatch<React.SetStateAction<FormField[]>>;
 }) {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'prizes' | 'pageConfig'>('dashboard');
   const [searchText, setSearchText] = useState('');
@@ -988,7 +1054,7 @@ function AdminApp({
                     <button
                       onClick={async () => {
                         const ok = await updateProject(eventId, {
-                          settings: { wheelTitle, wheelSubtitle, formTitle, formSubtitle, formButtonText, footerText }
+                          settings: { wheelTitle, wheelSubtitle, formTitle, formSubtitle, formButtonText, footerText, formFields }
                         });
                         if (ok) showToast('✅ 已保存');
                       }}
@@ -1305,7 +1371,7 @@ function AdminApp({
                       <button
                         onClick={async () => {
                           const ok = await updateProject(eventId, {
-                            settings: { wheelTitle, wheelSubtitle, formTitle, formSubtitle, formButtonText, footerText }
+                            settings: { wheelTitle, wheelSubtitle, formTitle, formSubtitle, formButtonText, footerText, formFields }
                           });
                           if (ok) showToast('✅ 配置已保存');
                         }}
@@ -1315,9 +1381,9 @@ function AdminApp({
                       </button>
                     </div>
 
-                    {/* 登录页配置 */}
+                    {/* 登录页标题配置 */}
                     <div className="bg-white border border-[#e2e8f0] rounded-2xl shadow-sm p-4">
-                      <h3 className="font-bold text-sm text-[#0f172a] mb-3">📋 登录页</h3>
+                      <h3 className="font-bold text-sm text-[#0f172a] mb-3">📋 标题与按钮</h3>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="space-y-1">
                           <label className="text-[11px] text-[#64748b] font-bold">主标题</label>
@@ -1334,6 +1400,49 @@ function AdminApp({
                           <input type="text" value={formButtonText} onChange={e => setFormButtonText(e.target.value)} placeholder="登记并参与抽奖"
                             className="w-full bg-[#f8fafc] border border-[#cbd5e1] px-3 py-2 rounded-lg text-sm outline-none focus:border-[#003cff] focus:ring-2 focus:ring-[#003cff]/10 text-[#0f172a]" />
                         </div>
+                      </div>
+                    </div>
+
+                    {/* 表单字段开关 */}
+                    <div className="bg-white border border-[#e2e8f0] rounded-2xl shadow-sm p-4">
+                      <h3 className="font-bold text-sm text-[#0f172a] mb-3">📝 表单字段</h3>
+                      <p className="text-[11px] text-[#94a3b8] mb-3">控制用户填写哪些信息，可自定义每个字段的显示名称</p>
+                      <div className="space-y-2">
+                        {formFields.map((field, idx) => (
+                          <div key={field.key} className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${field.enabled ? 'border-[#003cff]/20 bg-[#f0f4ff]' : 'border-[#e2e8f0] bg-[#f8fafc] opacity-50'}`}>
+                            {/* 启用开关 */}
+                            <button
+                              onClick={() => {
+                                if (field.locked) return;
+                                setFormFields(prev => prev.map((f, i) => i === idx ? { ...f, enabled: !f.enabled } : f));
+                              }}
+                              className={`w-10 h-[22px] rounded-full relative shrink-0 transition-all ${field.locked ? 'cursor-not-allowed' : 'cursor-pointer'} ${field.enabled ? 'bg-[#003cff]' : 'bg-[#cbd5e1]'}`}
+                            >
+                              <div className={`absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all ${field.enabled ? 'left-[22px]' : 'left-[3px]'}`} />
+                            </button>
+                            {/* 标签编辑 */}
+                            <input
+                              type="text"
+                              value={field.label}
+                              onChange={e => setFormFields(prev => prev.map((f, i) => i === idx ? { ...f, label: e.target.value } : f))}
+                              className="flex-1 bg-transparent border-none outline-none text-sm text-[#0f172a] font-medium min-w-0"
+                              placeholder="字段名称"
+                            />
+                            {/* 必填/选填切换 */}
+                            {field.enabled && (
+                              field.locked ? (
+                                <span className="text-[10px] bg-[#003cff]/10 text-[#003cff] px-2 py-1 rounded-md font-bold shrink-0">必填</span>
+                              ) : (
+                                <button
+                                  onClick={() => setFormFields(prev => prev.map((f, i) => i === idx ? { ...f, required: !f.required } : f))}
+                                  className={`text-[10px] px-2 py-1 rounded-md font-bold transition-all shrink-0 border ${field.required ? 'bg-red-50 text-red-600 border-red-200' : 'bg-[#f1f5f9] text-[#94a3b8] border-[#e2e8f0] hover:border-[#cbd5e1]'}`}
+                                >
+                                  {field.required ? '✱ 必填' : '选填'}
+                                </button>
+                              )
+                            )}
+                          </div>
+                        ))}
                       </div>
                     </div>
 
@@ -1366,11 +1475,13 @@ function AdminApp({
                               <span className="w-6 h-[1px] bg-[#003cff]" />
                             </div>
                           </div>
-                          {/* 表单 */}
+                          {/* 表单 - 动态字段 */}
                           <div className="w-full bg-white/60 backdrop-blur-xl p-6 rounded-xl border border-[#003cff]/10 space-y-4">
-                            {['您的姓名', '手机号码', '所在公司（选填）'].map(ph => (
-                              <div key={ph} className="border-b border-[#003cff]/15 pb-3">
-                                <span className="text-[#94a3b8] text-sm text-center block" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>{ph}</span>
+                            {formFields.filter(f => f.enabled).map(f => (
+                              <div key={f.key} className="border-b border-[#003cff]/15 pb-3">
+                                <span className="text-[#94a3b8] text-sm text-center block" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>
+                                  {f.label}{f.required && <span className="text-red-400 ml-0.5">*</span>}
+                                </span>
                               </div>
                             ))}
                             <div className="bg-[#003cff] text-white text-center py-3 rounded text-sm font-bold tracking-widest mt-4" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>
