@@ -48,6 +48,7 @@ const ProjectListPage = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectMode, setNewProjectMode] = useState<'wheel' | 'rolling'>('wheel');
   const [creating, setCreating] = useState(false);
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
 
@@ -94,17 +95,17 @@ const ProjectListPage = () => {
     setProjects(projectsWithStats);
   };
 
-  // 创建项目
   const handleCreateProject = async () => {
     if (!newProjectName.trim() || !user) return;
     
     setCreating(true);
-    const project = await createProject(user.id, { name: newProjectName.trim() });
+    const project = await createProject(user.id, { name: newProjectName.trim(), mode: newProjectMode });
     
     if (project) {
       setProjects([{ ...project, stats: { participantCount: 0, checkedInCount: 0, prizeCount: 0, winnerCount: 0 } }, ...projects]);
       setShowCreateModal(false);
       setNewProjectName('');
+      setNewProjectMode('wheel');
       // 跳转到项目设置页
       navigate(`/project/${project.id}`);
     }
@@ -168,10 +169,11 @@ const ProjectListPage = () => {
 
   return (
     <div className="min-h-screen bg-[#0b0a1a] text-white">
-      {/* 背景 */}
-      <div className="fixed inset-0 z-0">
-        <div className="absolute top-[-20%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-blue-600/20 filter blur-[120px]" />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[60vw] h-[60vw] rounded-full bg-purple-600/15 filter blur-[150px]" />
+      {/* 沉浸式流光背景 */}
+      <div className="fixed inset-0 z-0 pointer-events-none">
+        <div className="absolute top-[10%] left-[10%] w-[50vw] h-[50vw] bg-blue-600/20 mix-blend-screen filter blur-[150px] rounded-full" />
+        <div className="absolute bottom-[10%] right-[10%] w-[60vw] h-[60vw] bg-purple-600/15 mix-blend-screen filter blur-[150px] rounded-full" />
+        <div className="absolute inset-0 bg-black/40 apple-gradient-mask" />
       </div>
 
       {/* Header */}
@@ -222,23 +224,23 @@ const ProjectListPage = () => {
           <div className="flex items-center gap-3 w-full sm:w-auto">
             {/* 搜索框 */}
             <div className="relative flex-1 sm:w-64">
-              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+              <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="搜索项目..."
-                className="w-full pl-10 pr-4 py-2 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                className="w-full pl-11 pr-4 py-3 apple-glass border border-white/10 rounded-2xl text-[15px] font-medium text-white placeholder-white/30 focus:outline-none focus:border-blue-500/50 transition-all shadow-[inset_0_2px_10px_rgba(0,0,0,0.2)]"
               />
             </div>
             
             {/* 创建按钮 */}
             <button
               onClick={() => setShowCreateModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 rounded-xl text-white font-medium hover:shadow-lg hover:shadow-blue-500/30 transition-all whitespace-nowrap"
+              className="flex items-center gap-2 px-5 py-3 bg-white text-black rounded-2xl font-bold hover:shadow-[0_4px_30px_rgba(255,255,255,0.4)] transition-all active:scale-95 whitespace-nowrap"
             >
               <Plus size={20} />
-              <span className="hidden sm:inline">新建项目</span>
+              <span className="hidden sm:inline tracking-wide">新建项目</span>
             </button>
           </div>
         </div>
@@ -268,48 +270,55 @@ const ProjectListPage = () => {
             {filteredProjects.map((project) => (
               <div
                 key={project.id}
-                className="group relative bg-white/5 border border-white/10 rounded-2xl overflow-hidden hover:border-blue-500/50 transition-all hover:shadow-lg hover:shadow-blue-500/10"
+                className="group relative apple-glass border border-white/10 rounded-[28px] overflow-hidden hover:border-white/20 transition-all duration-300 hover:shadow-[0_10px_40px_rgba(0,0,0,0.5)] transform hover:-translate-y-1"
               >
                 {/* 封面 */}
                 <div 
-                  className="h-32 bg-gradient-to-br from-blue-600/30 to-purple-600/30 relative cursor-pointer"
+                  className="h-36 bg-gradient-to-br from-[#0a0a0c] to-[#1c1c1e] relative cursor-pointer border-b border-white/5"
                   onClick={() => navigate(`/project/${project.id}`)}
                 >
                   {project.cover_image ? (
-                    <img src={project.cover_image} alt="" className="w-full h-full object-cover" />
+                     <img src={project.cover_image} alt="" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
                   ) : (
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <Sparkles size={48} className="text-white/30" />
+                    <div className="absolute inset-0 flex items-center justify-center bg-white/5 group-hover:bg-white/10 transition-colors">
+                      <Sparkles size={40} className="text-white/20 group-hover:text-white/40 transition-colors" />
                     </div>
                   )}
                   
                   {/* 状态标签 */}
-                  <div className="absolute top-3 left-3">
+                  <div className="absolute top-4 left-4 flex items-center gap-2">
                     <StatusBadge status={project.status} />
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase backdrop-blur-xl border ${
+                      (project as any).mode === 'rolling'
+                        ? 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                        : 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+                    }`}>
+                      {(project as any).mode === 'rolling' ? '轮动式' : '转盘式'}
+                    </span>
                   </div>
                   
                   {/* 更多菜单 */}
-                  <div className="absolute top-3 right-3">
+                  <div className="absolute top-4 right-4">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         setActiveMenu(activeMenu === project.id ? null : project.id);
                       }}
-                      className="w-8 h-8 bg-black/50 hover:bg-black/70 rounded-lg flex items-center justify-center text-white transition-colors"
+                      className="w-8 h-8 apple-glass backdrop-blur-xl hover:bg-white/20 rounded-full flex items-center justify-center text-white/80 transition-colors border border-white/10"
                     >
                       <MoreVertical size={16} />
                     </button>
                     
                     {activeMenu === project.id && (
-                      <div className="absolute right-0 top-10 w-40 bg-[#1c1c1e] border border-white/10 rounded-xl shadow-xl overflow-hidden z-20">
+                      <div className="absolute right-0 top-10 w-44 apple-glass border border-white/10 rounded-2xl shadow-2xl overflow-hidden z-20 py-2">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             navigate(`/project/${project.id}`);
                           }}
-                          className="w-full px-4 py-3 text-left text-sm hover:bg-white/10 flex items-center gap-2"
+                          className="w-full px-4 py-2.5 text-left text-[14px] font-medium hover:bg-white/10 flex items-center gap-3 transition-colors"
                         >
-                          <Settings size={16} />
+                          <Settings size={16} className="text-white/60" />
                           项目设置
                         </button>
                         <button
@@ -318,9 +327,9 @@ const ProjectListPage = () => {
                             navigator.clipboard.writeText(project.id);
                             setActiveMenu(null);
                           }}
-                          className="w-full px-4 py-3 text-left text-sm hover:bg-white/10 flex items-center gap-2"
+                          className="w-full px-4 py-2.5 text-left text-[14px] font-medium hover:bg-white/10 flex items-center gap-3 transition-colors"
                         >
-                          <Copy size={16} />
+                          <Copy size={16} className="text-white/60" />
                           复制ID
                         </button>
                         <button
@@ -328,7 +337,7 @@ const ProjectListPage = () => {
                             e.stopPropagation();
                             handleDeleteProject(project.id);
                           }}
-                          className="w-full px-4 py-3 text-left text-sm hover:bg-red-500/20 text-red-400 flex items-center gap-2"
+                          className="w-full px-4 py-2.5 text-left text-[14px] font-medium hover:bg-red-500/20 text-red-400 flex items-center gap-3 transition-colors mt-1 border-t border-white/5 pt-3"
                         >
                           <Trash2 size={16} />
                           删除项目
@@ -340,42 +349,42 @@ const ProjectListPage = () => {
                 
                 {/* 内容 */}
                 <div 
-                  className="p-4 cursor-pointer"
+                  className="p-6 cursor-pointer"
                   onClick={() => navigate(`/project/${project.id}`)}
                 >
-                  <h3 className="text-lg font-bold mb-1 truncate">{project.name}</h3>
-                  <p className="text-gray-500 text-sm mb-4 flex items-center gap-1">
+                  <h3 className="text-xl font-bold tracking-tight mb-1.5 truncate">{project.name}</h3>
+                  <p className="text-white/50 text-[13px] font-medium tracking-wide mb-6 flex items-center gap-1.5 uppercase">
                     <Calendar size={14} />
                     {formatDate(project.event_date)}
                   </p>
                   
                   {/* 统计 */}
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="bg-white/5 rounded-lg p-2 text-center">
-                      <Users size={16} className="mx-auto mb-1 text-blue-400" />
-                      <p className="text-lg font-bold">{project.stats?.participantCount || 0}</p>
-                      <p className="text-xs text-gray-500">参与者</p>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="apple-glass rounded-xl p-3 text-center border border-white/5">
+                      <Users size={16} className="mx-auto mb-1.5 text-blue-400" />
+                      <p className="text-[17px] font-bold">{project.stats?.participantCount || 0}</p>
+                      <p className="text-[10px] font-semibold tracking-wider text-white/40 uppercase mt-0.5">登记</p>
                     </div>
-                    <div className="bg-white/5 rounded-lg p-2 text-center">
-                      <Gift size={16} className="mx-auto mb-1 text-purple-400" />
-                      <p className="text-lg font-bold">{project.stats?.prizeCount || 0}</p>
-                      <p className="text-xs text-gray-500">奖项</p>
+                    <div className="apple-glass rounded-xl p-3 text-center border border-white/5">
+                      <Gift size={16} className="mx-auto mb-1.5 text-purple-400" />
+                      <p className="text-[17px] font-bold">{project.stats?.prizeCount || 0}</p>
+                      <p className="text-[10px] font-semibold tracking-wider text-white/40 uppercase mt-0.5">奖项</p>
                     </div>
-                    <div className="bg-white/5 rounded-lg p-2 text-center">
-                      <Sparkles size={16} className="mx-auto mb-1 text-yellow-400" />
-                      <p className="text-lg font-bold">{project.stats?.winnerCount || 0}</p>
-                      <p className="text-xs text-gray-500">中奖</p>
+                    <div className="apple-glass rounded-xl p-3 text-center border border-white/5">
+                      <Sparkles size={16} className="mx-auto mb-1.5 text-amber-400" />
+                      <p className="text-[17px] font-bold">{project.stats?.winnerCount || 0}</p>
+                      <p className="text-[10px] font-semibold tracking-wider text-white/40 uppercase mt-0.5">中奖</p>
                     </div>
                   </div>
                 </div>
                 
                 {/* 进入按钮 */}
-                <div className="px-4 pb-4">
+                <div className="px-6 pb-6">
                   <button
                     onClick={() => navigate(`/project/${project.id}`)}
-                    className="w-full py-2 bg-white/10 hover:bg-white/20 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors"
+                    className="w-full py-3 apple-glass hover:bg-white/10 rounded-2xl text-[14px] font-bold tracking-wider uppercase flex items-center justify-center gap-2 transition-all active:scale-95 border border-white/10"
                   >
-                    进入项目
+                    ENTER WORKSPACE
                     <ChevronRight size={16} />
                   </button>
                 </div>
@@ -387,37 +396,68 @@ const ProjectListPage = () => {
 
       {/* 创建项目弹窗 */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="bg-[#1c1c1e] border border-white/10 rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl">
-            <h3 className="text-xl font-bold mb-4">创建新项目</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fade-in p-4">
+        <div className="apple-glass-dark border border-white/15 rounded-[32px] p-8 w-full max-w-sm shadow-[0_20px_80px_rgba(0,0,0,0.6)] transform animate-bounceIn">
+            <h3 className="text-2xl font-bold tracking-tight mb-2">新建项目</h3>
+            <p className="text-[13px] text-white/50 tracking-wide mb-6">输入展会或活动名称并选择抽奖模式</p>
             
             <input
               type="text"
               value={newProjectName}
               onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="项目名称，如：2024年会抽奖"
-              className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 mb-4"
+              placeholder="e.g. 2026 Apple Event"
+              className="w-full px-4 py-3.5 bg-black/40 border border-white/10 rounded-2xl text-[15px] font-medium text-white placeholder-white/30 focus:outline-none focus:border-blue-500/50 mb-4 transition-all shadow-[inset_0_2px_10px_rgba(0,0,0,0.2)]"
               autoFocus
               onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
             />
+
+            {/* 模式选择器 */}
+            <div className="mb-6">
+              <p className="text-[12px] text-white/40 font-semibold uppercase tracking-wider mb-3">抽奖模式</p>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setNewProjectMode('wheel')}
+                  className={`py-3 rounded-2xl text-[13px] font-bold tracking-wide border transition-all ${
+                    newProjectMode === 'wheel'
+                      ? 'bg-blue-500/20 border-blue-500/50 text-blue-300 shadow-[0_0_20px_rgba(59,130,246,0.15)]'
+                      : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
+                  }`}
+                >
+                  🎰 转盘式
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewProjectMode('rolling')}
+                  className={`py-3 rounded-2xl text-[13px] font-bold tracking-wide border transition-all ${
+                    newProjectMode === 'rolling'
+                      ? 'bg-purple-500/20 border-purple-500/50 text-purple-300 shadow-[0_0_20px_rgba(168,85,247,0.15)]'
+                      : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
+                  }`}
+                >
+                  🎲 轮动式
+                </button>
+              </div>
+            </div>
             
             <div className="flex gap-3">
               <button
                 onClick={() => {
                   setShowCreateModal(false);
                   setNewProjectName('');
+                  setNewProjectMode('wheel');
                 }}
-                className="flex-1 py-3 bg-white/10 hover:bg-white/20 rounded-xl transition-colors"
+                className="flex-1 py-3.5 apple-glass hover:bg-white/10 rounded-2xl font-semibold transition-all text-white/80"
               >
                 取消
               </button>
               <button
                 onClick={handleCreateProject}
                 disabled={!newProjectName.trim() || creating}
-                className="flex-1 py-3 bg-blue-500 hover:bg-blue-600 rounded-xl font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                className="flex-1 py-3.5 bg-white text-black hover:bg-gray-100 rounded-2xl font-bold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 active:scale-95 transition-all"
               >
-                {creating ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}
-                创建
+                {creating ? <Loader2 size={18} className="animate-spin text-black" /> : <Plus size={18} />}
+                创建并进入
               </button>
             </div>
           </div>

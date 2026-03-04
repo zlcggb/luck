@@ -42,6 +42,7 @@ export interface LuckEvent {
   location_radius: number;
   require_location: boolean;
   status: 'draft' | 'active' | 'completed';
+  mode: 'wheel' | 'rolling';
   owner_id: string | null;
   cover_image: string | null;
   settings: Record<string, unknown>;
@@ -79,6 +80,11 @@ export interface LuckWinner {
   name: string;
   department: string | null;
   avatar: string | null;
+  phone: string | null;
+  company: string | null;
+  redeem_code: string | null;
+  redeemed_at: string | null;
+  status: 'pending' | 'redeemed';
   won_at: string;
   created_at: string;
   // 关联数据
@@ -690,8 +696,10 @@ export const getUserProjects = async (userId: string): Promise<LuckEvent[]> => {
  */
 export const createProject = async (
   ownerId: string,
-  data: { name: string; description?: string; event_date?: string; cover_image?: string }
+  data: { name: string; description?: string; event_date?: string; cover_image?: string; mode?: 'wheel' | 'rolling' }
 ): Promise<LuckEvent | null> => {
+  const mode = data.mode || 'wheel';
+
   const { data: project, error } = await supabase
     .from('luck_events')
     .insert({
@@ -700,6 +708,7 @@ export const createProject = async (
       description: data.description || null,
       event_date: data.event_date || new Date().toISOString().split('T')[0],
       cover_image: data.cover_image || null,
+      mode,
       status: 'draft',
     })
     .select()
@@ -708,6 +717,24 @@ export const createProject = async (
   if (error) {
     console.error('创建项目失败:', error);
     return null;
+  }
+
+  // 转盘模式：自动初始化默认奖品
+  if (mode === 'wheel' && project) {
+    const defaultPrizes = [
+      { name: '一等奖', description: 'Smartphone', quantity: 1, remaining: 1, sort_order: 1 },
+      { name: '二等奖', description: 'Headphones', quantity: 3, remaining: 3, sort_order: 2 },
+      { name: '三等奖', description: 'ShoppingBag', quantity: 5, remaining: 5, sort_order: 3 },
+      { name: '幸运奖', description: 'Coffee', quantity: 20, remaining: 20, sort_order: 4 },
+    ];
+
+    await supabase
+      .from('luck_prizes')
+      .insert(defaultPrizes.map(p => ({
+        event_id: project.id,
+        ...p,
+        is_active: true,
+      })));
   }
 
   return project as LuckEvent;
@@ -936,5 +963,206 @@ export const getProjectStats = async (eventId: string): Promise<{
     checkedInCount: checkIns.count || 0,
     prizeCount: prizes.count || 0,
     winnerCount: winners.count || 0,
+  };
+};
+
+// ============================================
+// 转盘抽奖专用 API
+// ============================================
+
+/**
+ * 生成唯一核销码
+ */
+const generateRedeemCode = (): string => {
+  const prefix = 'ISLE' + new Date().getFullYear();
+  const random = Math.floor(10000000 + Math.random() * 90000000);
+  return `${prefix}-${random}`;
+};
+
+/**
+ * 转盘抽奖：原子操作 - 检查库存 + 扣减 + 记录中奖
+ */
+export const wheelDraw = async (
+  eventId: string,
+  prizeId: string,
+  user: { name: string; phone: string; company?: string }
+): Promise<{ success: boolean; winner?: LuckWinner; error?: string }> => {
+  // 1. 检查库存
+  const { data: prize } = await supabase
+    .from('luck_prizes')
+    .select('remaining')
+    .eq('id', prizeId)
+    .single();
+
+  if (!prize || prize.remaining <= 0) {
+    return { success: false, error: '该奖品库存已空' };
+  }
+
+  // 2. 扣减库存
+  const { error: decrError } = await supabase.rpc('decrement_prize_remaining', { prize_id: prizeId });
+  if (decrError) {
+    console.error('扣减库存失败:', decrError);
+    return { success: false, error: '系统繁忙，请重试' };
+  }
+
+  // 3. 写入中奖记录
+  const redeemCode = generateRedeemCode();
+  const { data: winner, error: winError } = await supabase
+    .from('luck_winners')
+    .insert({
+      event_id: eventId,
+      prize_id: prizeId,
+      employee_id: user.phone, // 用手机号作为唯一标识
+      name: user.name,
+      phone: user.phone,
+      company: user.company || null,
+      redeem_code: redeemCode,
+      status: 'pending',
+    })
+    .select('*, prize:luck_prizes(*)')
+    .single();
+
+  if (winError) {
+    console.error('写入中奖记录失败:', winError);
+    // 回滚库存
+    await supabase.rpc('increment_prize_remaining', { prize_id: prizeId });
+    return { success: false, error: '记录失败，请重试' };
+  }
+
+  return { success: true, winner: winner as LuckWinner };
+};
+
+/**
+ * 核销中奖记录（按 ID）
+ */
+export const redeemWinner = async (winnerId: string): Promise<boolean> => {
+  const { error } = await supabase
+    .from('luck_winners')
+    .update({
+      status: 'redeemed',
+      redeemed_at: new Date().toISOString(),
+    })
+    .eq('id', winnerId);
+
+  if (error) {
+    console.error('核销失败:', error);
+    return false;
+  }
+  return true;
+};
+
+/**
+ * 按兑换码核销
+ */
+export const redeemByCode = async (
+  eventId: string,
+  code: string
+): Promise<{ success: boolean; winner?: LuckWinner; error?: string }> => {
+  const trimmed = code.trim().toUpperCase();
+  if (!trimmed) return { success: false, error: '请输入兑换码' };
+
+  // 查找匹配的中奖记录
+  const { data, error: fetchError } = await supabase
+    .from('luck_winners')
+    .select('*, prize:luck_prizes(*)')
+    .eq('event_id', eventId)
+    .eq('redeem_code', trimmed)
+    .single();
+
+  if (fetchError || !data) {
+    return { success: false, error: '未找到匹配的兑换码，请检查输入' };
+  }
+
+  if (data.status === 'redeemed') {
+    return { success: false, error: `该奖品已于 ${new Date(data.redeemed_at).toLocaleString('zh-CN')} 核销` };
+  }
+
+  // 执行核销
+  const { error: updateError } = await supabase
+    .from('luck_winners')
+    .update({ status: 'redeemed', redeemed_at: new Date().toISOString() })
+    .eq('id', data.id);
+
+  if (updateError) {
+    return { success: false, error: '核销操作失败，请重试' };
+  }
+
+  return { success: true, winner: { ...data, status: 'redeemed' } as LuckWinner };
+};
+
+/**
+ * 按兑换码查询中奖记录（仅查询，不核销）
+ */
+export const lookupByCode = async (
+  eventId: string,
+  code: string
+): Promise<{ found: boolean; winner?: LuckWinner; error?: string }> => {
+  const trimmed = code.trim().toUpperCase();
+  if (!trimmed) return { found: false, error: '请输入兑换码' };
+
+  const { data, error } = await supabase
+    .from('luck_winners')
+    .select('*, prize:luck_prizes(*)')
+    .eq('event_id', eventId)
+    .eq('redeem_code', trimmed)
+    .single();
+
+  if (error || !data) {
+    return { found: false, error: '未找到匹配的兑换码' };
+  }
+
+  return { found: true, winner: data as LuckWinner };
+};
+
+/**
+ * 检查手机号是否已在本活动中抽过奖
+ */
+export const checkPhoneDuplicate = async (eventId: string, phone: string): Promise<boolean> => {
+  const { count } = await supabase
+    .from('luck_winners')
+    .select('id', { count: 'exact', head: true })
+    .eq('event_id', eventId)
+    .eq('phone', phone);
+
+  return (count || 0) > 0;
+};
+
+/**
+ * 获取中奖记录（含奖品信息，管理端用）
+ */
+export const getWinnersWithPrizes = async (eventId: string): Promise<LuckWinner[]> => {
+  const { data, error } = await supabase
+    .from('luck_winners')
+    .select('*, prize:luck_prizes(*)')
+    .eq('event_id', eventId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('获取中奖记录失败:', error);
+    return [];
+  }
+  return (data || []) as LuckWinner[];
+};
+
+/**
+ * 获取转盘抽奖阶段统计
+ */
+export const getWheelStats = async (eventId: string): Promise<{
+  totalWinners: number;
+  redeemedCount: number;
+  remainingPrizes: number;
+}> => {
+  const [winners, redeemed, prizes] = await Promise.all([
+    supabase.from('luck_winners').select('id', { count: 'exact', head: true }).eq('event_id', eventId),
+    supabase.from('luck_winners').select('id', { count: 'exact', head: true }).eq('event_id', eventId).eq('status', 'redeemed'),
+    supabase.from('luck_prizes').select('remaining').eq('event_id', eventId).eq('is_active', true),
+  ]);
+
+  const remainingPrizes = (prizes.data || []).reduce((sum: number, p: { remaining: number }) => sum + p.remaining, 0);
+
+  return {
+    totalWinners: winners.count || 0,
+    redeemedCount: redeemed.count || 0,
+    remainingPrizes,
   };
 };
