@@ -353,24 +353,25 @@ export interface LotterySyncCallbacks {
   onPrizeUpdate?: (prize: LuckPrize) => void;
 }
 
-let lotterySyncChannel: ReturnType<typeof supabase.channel> | null = null;
-let currentLotterySyncEventId: string | null = null;
+const getLotteryChannelTopic = (eventId: string) => `lottery_sync_${eventId}`;
 
-export const getLotterySyncChannel = (eventId: string) => {
-  if (lotterySyncChannel && currentLotterySyncEventId === eventId) {
-    return lotterySyncChannel;
+let sharedLotteryChannel: ReturnType<typeof supabase.channel> | null = null;
+let sharedLotteryEventId: string | null = null;
+
+export const getOrCreateLotterySyncChannel = (eventId: string) => {
+  if (sharedLotteryChannel && sharedLotteryEventId === eventId) {
+    return sharedLotteryChannel;
   }
-  if (lotterySyncChannel) {
-    void supabase.removeChannel(lotterySyncChannel);
+  if (sharedLotteryChannel) {
+    void supabase.removeChannel(sharedLotteryChannel);
   }
-  currentLotterySyncEventId = eventId;
-  lotterySyncChannel = supabase.channel(`lottery_sync_${eventId}`, {
+  sharedLotteryEventId = eventId;
+  sharedLotteryChannel = supabase.channel(getLotteryChannelTopic(eventId), {
     config: {
-      broadcast: { self: false },
+      broadcast: { ack: true, self: false },
     },
   });
-  lotterySyncChannel.subscribe();
-  return lotterySyncChannel;
+  return sharedLotteryChannel;
 };
 
 /**
@@ -382,7 +383,10 @@ export const broadcastLotteryEvent = async (
 ) => {
   if (!eventId) return;
   try {
-    const channel = getLotterySyncChannel(eventId);
+    const channel = getOrCreateLotterySyncChannel(eventId);
+    if (channel.state !== 'joined' && channel.state !== 'joining') {
+      channel.subscribe();
+    }
     await channel.send({
       type: 'broadcast',
       event: 'lottery_action',
@@ -394,7 +398,7 @@ export const broadcastLotteryEvent = async (
 };
 
 /**
- * 订阅抽奖实时同频与数据库事件（供所有页面调用）
+ * 订阅抽奖实时同频与数据库事件（供所有客户端调用）
  */
 export const subscribeToLotterySync = (
   eventId: string,
@@ -402,8 +406,9 @@ export const subscribeToLotterySync = (
 ) => {
   if (!eventId) return () => {};
 
-  const channel = supabase
-    .channel(`lottery_sync_sub_${eventId}_${Math.random().toString(36).slice(2, 9)}`)
+  const channel = getOrCreateLotterySyncChannel(eventId);
+
+  channel
     .on(
       'broadcast',
       { event: 'lottery_action' },
@@ -454,11 +459,16 @@ export const subscribeToLotterySync = (
           callbacks.onPrizeUpdate(payload.new as LuckPrize);
         }
       }
-    )
-    .subscribe();
+    );
+
+  channel.subscribe();
 
   return () => {
     void supabase.removeChannel(channel);
+    if (sharedLotteryChannel === channel) {
+      sharedLotteryChannel = null;
+      sharedLotteryEventId = null;
+    }
   };
 };
 

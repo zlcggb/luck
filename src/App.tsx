@@ -601,7 +601,7 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
   useEffect(() => {
     if (!eventId) return;
 
-    return subscribeToLotterySync(eventId, {
+    const unsubscribe = subscribeToLotterySync(eventId, {
       onBroadcast: (action) => {
         if (action.type === 'DRAW_START') {
           if (action.prizeId) {
@@ -726,7 +726,100 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
         }));
       },
     });
+
+    return () => {
+      unsubscribe();
+    };
   }, [eventId, currentEmployeeId]);
+
+  // --- 实时数据增量兜底轮询（解决移动端锁屏唤醒、弱网或 Realtime 断开） ---
+  useEffect(() => {
+    if (!eventId) return;
+
+    let isSubscribed = true;
+
+    const pollLatestData = async () => {
+      if (isRolling) return;
+
+      try {
+        const [latestWinners, latestDbPrizes] = await Promise.all([
+          getWinners(eventId),
+          getDbPrizes(eventId),
+        ]);
+
+        if (!isSubscribed) return;
+
+        // 1. 同步中奖记录与已中奖工号
+        if (latestWinners.length > 0) {
+          const newExcludedIds = new Set(latestWinners.map(w => w.employee_id.trim().toUpperCase()));
+          setExcludedIds(prev => {
+            if (prev.size === newExcludedIds.size && [...prev].every(id => newExcludedIds.has(id))) {
+              return prev;
+            }
+            return newExcludedIds;
+          });
+
+          const formattedRecords: DrawRecord[] = latestWinners.map(w => ({
+            id: w.id,
+            timestamp: new Date(w.won_at).getTime(),
+            prizeId: w.prize_id,
+            prizeName: w.prize?.name || '已中奖项',
+            winners: [{
+              id: w.employee_id.trim().toUpperCase(),
+              name: w.name,
+              dept: w.department || '',
+              avatar: w.avatar || undefined,
+            }],
+          }));
+
+          setRecords(prev => {
+            if (prev.length === formattedRecords.length && prev[0]?.id === formattedRecords[0]?.id) {
+              return prev;
+            }
+            return formattedRecords;
+          });
+
+          // 检查当前用户是否中奖
+          if (currentEmployeeId) {
+            const myWin = latestWinners.find(w => w.employee_id.trim().toUpperCase() === currentEmployeeId.toUpperCase());
+            if (myWin && !currentUserWonPrize) {
+              setCurrentUserWonPrize({
+                prizeName: myWin.prize?.name || '大奖',
+              });
+            }
+          }
+        }
+
+        // 2. 同步奖项剩余库存
+        if (latestDbPrizes.length > 0) {
+          setPrizes(prev => {
+            let changed = false;
+            const updated = prev.map(p => {
+              const match = latestDbPrizes.find(dp => dp.id === p.id);
+              if (match) {
+                const newDrawn = match.quantity - match.remaining;
+                if (p.drawn !== newDrawn || p.count !== match.quantity) {
+                  changed = true;
+                  return { ...p, count: match.quantity, drawn: newDrawn };
+                }
+              }
+              return p;
+            });
+            return changed ? updated : prev;
+          });
+        }
+      } catch {
+        // 静默处理网络瞬断
+      }
+    };
+
+    const intervalTimer = setInterval(pollLatestData, 2500);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(intervalTimer);
+    };
+  }, [eventId, isRolling, currentEmployeeId, currentUserWonPrize]);
 
   // --- 核心逻辑：开始/停止抽奖 ---
   const toggleLottery = () => {
@@ -1298,51 +1391,51 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
                     const winners = getCurrentPrizeWinners();
                     const count = winners.length;
                     
-                    // 使用布局算法计算最优布局
+                    if (count === 0) {
+                      return (
+                        <div className="text-center text-white/40 py-8">
+                          暂无中奖记录
+                        </div>
+                      );
+                    }
+                    
                     const { layoutConfig } = calculateSummaryLayout(count);
                     const { rows, style } = layoutConfig;
-                    
                     let itemIndex = 0;
                     
-                    // 渲染每一行
                     return rows.map((rowCount, rowIdx) => {
                       const rowWinners = winners.slice(itemIndex, itemIndex + rowCount);
                       itemIndex += rowCount;
                       
                       return (
-                        <div key={`summary-row-${rowIdx}`} className="flex gap-2 md:gap-3 justify-center items-center w-full min-h-[min-content] my-1">
-                          {rowWinners.map((winner, idx) => (
-                            <div 
-                              key={`winner-${winner.id}-${idx}`}
-                              className={`relative overflow-hidden bg-gradient-to-br from-[color:rgb(var(--color-accent-rgb)/0.16)] to-[color:rgb(var(--color-secondary-rgb)/0.18)] backdrop-blur-xl border border-[color:rgb(var(--color-accent-rgb)/0.35)] rounded-xl md:rounded-2xl flex flex-col items-center justify-center shadow-[0_0_20px_rgb(var(--color-accent-rgb)/0.2)] hover:shadow-[0_0_35px_rgb(var(--color-accent-rgb)/0.35)] transition-all duration-300 hover:scale-[1.03] shrink-0 ${style.container} ${style.padding}`}
+                        <div key={`row-${rowIdx}`} className="flex gap-2 md:gap-3 justify-center flex-1 my-1">
+                          {rowWinners.map((winner) => (
+                            <div
+                              key={winner.id}
+                              className={`
+                                relative overflow-hidden
+                                bg-white/10 backdrop-blur-xl border border-white/20 
+                                rounded-lg md:rounded-xl
+                                flex items-center
+                                shadow-[0_0_20px_rgba(0,0,0,0.3)]
+                                transition-all duration-300
+                                ${style.container} ${style.padding}
+                              `}
                             >
-                              {/* Winner 标记 */}
-                              <div className="absolute top-1 left-1 md:top-2 md:left-2 px-1.5 md:px-2 py-0.5 md:py-1 bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)] rounded-md text-[7px] md:text-[9px] font-bold uppercase tracking-wider shadow-lg">
-                                ★ Winner
-                              </div>
-                              
-                              {/* 序号 */}
-                              <div className="absolute top-1 right-1 md:top-2 md:right-2 px-1.5 md:px-2 py-0.5 bg-white/10 rounded-md text-[8px] md:text-[10px] font-bold text-[var(--color-text-muted)]">
-                                #{itemIndex - rowCount + idx + 1}
-                              </div>
-                              
-                              {/* 头像 */}
-                              <div className="mt-3 md:mt-5">
-                                <img 
-                                  src={getAvatarUrl(winner)} 
+                              <div className="relative shrink-0">
+                                <img
+                                  src={getAvatarUrl(winner)}
                                   data-fallback={getAvatarFallbackUrl(winner)}
                                   onError={handleAvatarImageError}
-                                  alt="avatar" 
-                                  className={`rounded-full object-cover shadow-xl border-2 md:border-4 border-[color:rgb(var(--color-accent-rgb)/0.6)] ${style.avatar}`}
+                                  alt="avatar"
+                                  className={`rounded-full object-cover border border-[var(--color-accent)] ${style.avatar}`}
                                 />
                               </div>
-                              
-                              {/* 信息 */}
-                              <div className="text-center mt-1.5 md:mt-3 min-w-0 w-full px-1">
-                                <h3 className={`font-black text-white truncate drop-shadow-md ${style.name}`}>
+                              <div className="min-w-0 flex-1 ml-2">
+                                <h3 className={`font-black text-white truncate ${style.name}`}>
                                   {winner.name}
                                 </h3>
-                                <p className={`text-[color:rgb(var(--color-accent-rgb)/0.86)] truncate font-medium mt-0.5 ${style.dept}`}>
+                                <p className={`text-[var(--color-text-muted)] truncate ${style.dept}`}>
                                   {winner.dept}
                                 </p>
                                 <p className={`text-[var(--color-text-secondary)] mt-0.5 ${style.id || 'text-[8px] md:text-[10px]'}`}>
@@ -1364,10 +1457,19 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
                   const rows = getSpecialLayoutRows(batchSize);
                   let itemIndex = 0;
                   
-                  // 获取要显示的数据（placeholder 或 实际数据）
-                  const displayItems = !hasDrawn && !isRolling 
+                  const prizeWinners = getCurrentPrizeWinners();
+                  const effectiveDisplay = (currentDisplay.length > 0 || isRolling)
+                    ? currentDisplay
+                    : isPrizeCompleted && prizeWinners.length > 0
+                      ? prizeWinners.slice(0, Math.min(batchSize, prizeWinners.length))
+                      : [];
+                  
+                  const isPlaceholder = !isRolling && effectiveDisplay.length === 0;
+                  const isWinnerBadgeActive = showConfetti || hasDrawn || (!isRolling && isPrizeCompleted && effectiveDisplay.length > 0);
+
+                  const displayItems = isPlaceholder
                     ? Array.from({ length: batchSize }).map((_, i) => ({ placeholder: true, idx: i }))
-                    : currentDisplay.map((user, i) => ({ placeholder: false, user, idx: i }));
+                    : effectiveDisplay.map((user, i) => ({ placeholder: false, user, idx: i }));
                   
                   return rows.map((rowConfig, rowIdx) => {
                     const rowItemCount = rowConfig[0];
@@ -1378,7 +1480,6 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
                       <div key={`row-${rowIdx}`} className="flex gap-2 md:gap-3 justify-center flex-1">
                         {rowItems.map((item) => {
                           if (item.placeholder) {
-                            // 虚位以待卡片
                             return (
                               <div 
                                 key={`placeholder-${item.idx}`}
@@ -1416,7 +1517,6 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
                               </div>
                             );
                           } else {
-                            // 实际用户卡片
                             const user = (item as { placeholder: false; user: Participant; idx: number }).user;
                             return (
                               <div 
@@ -1429,7 +1529,7 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
                                   shadow-[0_0_20px_rgba(0,0,0,0.3)]
                                   transition-all duration-300
                                   ${batchSize === 5 ? 'p-2 md:p-3 lg:p-4 flex-1 max-w-[180px] md:max-w-[220px] lg:max-w-[260px]' : 'p-1.5 md:p-2 lg:p-3 flex-1 max-w-[140px] md:max-w-[170px] lg:max-w-[200px]'}
-                                  ${showConfetti ? 'ring-2 ring-[var(--color-accent)] scale-[1.01] shadow-[0_0_30px_rgb(var(--color-accent-rgb)/0.3)]' : ''}
+                                  ${isWinnerBadgeActive ? 'ring-2 ring-[var(--color-accent)] scale-[1.01] shadow-[0_0_30px_rgb(var(--color-accent-rgb)/0.3)]' : ''}
                                 `}
                               >
                                 <div className="absolute top-0 right-0 p-1 md:p-2 opacity-30">
@@ -1463,7 +1563,7 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
                                     <p className={`font-light tracking-widest text-[var(--color-text-secondary)] uppercase truncate ${cardStyle.dept}`}>
                                       {user.dept}
                                     </p>
-                                    {showConfetti && (
+                                    {isWinnerBadgeActive && (
                                       <p className="text-[var(--color-text-muted)] mt-0.5 text-[8px] md:text-[10px]">
                                         工号: {user.id}
                                       </p>
@@ -1471,7 +1571,7 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
                                   </div>
                                 </div>
 
-                                {showConfetti && (
+                                {isWinnerBadgeActive && (
                                   <div className="absolute top-0.5 left-0.5 md:top-1 md:left-1 px-1 md:px-1.5 py-0.5 bg-[var(--color-accent)] rounded text-[6px] md:text-[8px] font-bold uppercase tracking-wider animate-bounce">
                                     Winner
                                   </div>
@@ -1495,51 +1595,59 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
               `}
               style={{ maxHeight: 'calc(100% - 60px)' }}
               >
-              
-              {/* 根据是否已抽奖来决定显示内容 */}
-              {!hasDrawn && !isRolling ? (
-                // 虚位以待状态
-                Array.from({ length: batchSize }).map((_, idx) => (
-                  <div 
-                    key={`placeholder-${idx}`}
-                    className={`
-                      relative overflow-hidden bg-white/5 backdrop-blur-xl border border-dashed border-white/20 
-                      rounded-lg md:rounded-xl lg:rounded-2xl flex flex-col items-center justify-center 
-                      shadow-[0_0_20px_rgba(0,0,0,0.2)] transition-all duration-300
-                      ${batchSize === 1 ? 'p-4 md:p-6 lg:p-8' : batchSize === 4 ? 'p-3 md:p-4 lg:p-5' : batchSize === 9 ? 'p-2 md:p-3' : 'p-1.5 md:p-2'}
-                    `}
-                  >
-                    <div className="absolute top-0 right-0 p-1 md:p-2 opacity-30">
-                      <Grid size={batchSize >= 9 ? 10 : batchSize >= 4 ? 12 : 16} />
-                    </div>
+              {(() => {
+                const prizeWinners = getCurrentPrizeWinners();
+                const effectiveDisplay = (currentDisplay.length > 0 || isRolling)
+                  ? currentDisplay
+                  : isPrizeCompleted && prizeWinners.length > 0
+                    ? prizeWinners.slice(0, Math.min(batchSize, prizeWinners.length))
+                    : [];
+                
+                const isPlaceholder = !isRolling && effectiveDisplay.length === 0;
+                const isWinnerBadgeActive = showConfetti || hasDrawn || (!isRolling && isPrizeCompleted && effectiveDisplay.length > 0);
 
-                    <div className={`flex items-center ${cardStyle.layout}`}>
-                      <div className="relative shrink-0">
-                        <div className={`rounded-full bg-gradient-to-br from-white/10 to-white/5 flex items-center justify-center border-2 border-dashed border-white/20 ${cardStyle.avatar}`}>
-                          <HelpCircle className={`text-white/30 ${cardStyle.iconSize}`} />
+                if (isPlaceholder) {
+                  return Array.from({ length: batchSize }).map((_, idx) => (
+                    <div 
+                      key={`placeholder-${idx}`}
+                      className={`
+                        relative overflow-hidden bg-white/5 backdrop-blur-xl border border-dashed border-white/20 
+                        rounded-lg md:rounded-xl lg:rounded-2xl flex flex-col items-center justify-center 
+                        shadow-[0_0_20px_rgba(0,0,0,0.2)] transition-all duration-300
+                        ${batchSize === 1 ? 'p-4 md:p-6 lg:p-8' : batchSize === 4 ? 'p-3 md:p-4 lg:p-5' : batchSize === 9 ? 'p-2 md:p-3' : 'p-1.5 md:p-2'}
+                      `}
+                    >
+                      <div className="absolute top-0 right-0 p-1 md:p-2 opacity-30">
+                        <Grid size={batchSize >= 9 ? 10 : batchSize >= 4 ? 12 : 16} />
+                      </div>
+
+                      <div className={`flex items-center ${cardStyle.layout}`}>
+                        <div className="relative shrink-0">
+                          <div className={`rounded-full bg-gradient-to-br from-white/10 to-white/5 flex items-center justify-center border-2 border-dashed border-white/20 ${cardStyle.avatar}`}>
+                            <HelpCircle className={`text-white/30 ${cardStyle.iconSize}`} />
+                          </div>
+                        </div>
+
+                        <div className={`min-w-0 ${batchSize === 1 ? 'text-center md:text-left' : 'text-center'}`}>
+                          <h2 className={`font-black text-white/20 drop-shadow-md ${cardStyle.name}`}>
+                            {batchSize >= 16 ? '?' : '虚位以待'}
+                          </h2>
+                          {batchSize < 16 && (
+                            <p className={`font-light tracking-widest text-white/10 uppercase ${cardStyle.dept}`}>
+                              Waiting...
+                            </p>
+                          )}
                         </div>
                       </div>
 
-                      <div className={`min-w-0 ${batchSize === 1 ? 'text-center md:text-left' : 'text-center'}`}>
-                        <h2 className={`font-black text-white/20 drop-shadow-md ${cardStyle.name}`}>
-                          {batchSize >= 16 ? '?' : '虚位以待'}
-                        </h2>
-                        {batchSize < 16 && (
-                          <p className={`font-light tracking-widest text-white/10 uppercase ${cardStyle.dept}`}>
-                            Waiting...
-                          </p>
-                        )}
+                      <div className={`absolute top-0.5 left-0.5 md:top-1 md:left-1 px-1 md:px-1.5 py-0.5 bg-white/10 rounded text-[7px] md:text-[9px] font-bold text-white/30 ${batchSize >= 16 ? 'hidden md:block' : ''}`}>
+                        #{idx + 1}
                       </div>
                     </div>
+                  ));
+                }
 
-                    <div className={`absolute top-0.5 left-0.5 md:top-1 md:left-1 px-1 md:px-1.5 py-0.5 bg-white/10 rounded text-[7px] md:text-[9px] font-bold text-white/30 ${batchSize >= 16 ? 'hidden md:block' : ''}`}>
-                      #{idx + 1}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                // 正常显示用户卡片
-                currentDisplay.map((user, idx) => (
+                return effectiveDisplay.map((user, idx) => (
                   <div 
                     key={`${user.id}-${idx}`}
                     className={`
@@ -1550,7 +1658,7 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
                       shadow-[0_0_20px_rgba(0,0,0,0.3)]
                       transition-all duration-300
                       ${batchSize === 1 ? 'p-4 md:p-6 lg:p-8' : batchSize === 4 ? 'p-3 md:p-4 lg:p-5' : batchSize === 9 ? 'p-2 md:p-3' : 'p-1.5 md:p-2'}
-                      ${showConfetti ? 'ring-2 ring-[var(--color-accent)] scale-[1.01] shadow-[0_0_30px_rgb(var(--color-accent-rgb)/0.3)]' : ''}
+                      ${isWinnerBadgeActive ? 'ring-2 ring-[var(--color-accent)] scale-[1.01] shadow-[0_0_30px_rgb(var(--color-accent-rgb)/0.3)]' : ''}
                     `}
                   >
                     <div className="absolute top-0 right-0 p-1 md:p-2 opacity-30">
@@ -1598,8 +1706,8 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
                        </div>
                     )}
                   </div>
-                ))
-              )}
+                ));
+              })()}
             </div>
             )}
 
