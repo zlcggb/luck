@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { 
   QrCode, 
-  Sparkles, 
-  RefreshCw,
-  Check,
+  RefreshCw, 
+  Check, 
   Play,
 } from 'lucide-react';
 import { 
@@ -18,25 +17,22 @@ import {
   subscribeToCheckIns,
   startCheckInSession,
   endCheckInSession,
-  getCheckInSessionStatus
+  getCheckInSessionStatus,
+  resetCheckInStatusForEvent,
+  initDefaultParticipants,
+  clearAllParticipantsForEvent,
+  checkIsEventAdmin,
 } from '../utils/supabaseCheckin';
 import { CheckInSettings } from '../types/checkin';
-import { loadCheckInSettings } from '../utils/checkinStorage';
+import { loadCheckInSettings, clearCheckInRecords } from '../utils/checkinStorage';
+import { loadProjectSettings, saveProjectSettings, getEmployeeIdPrefixFromSettings } from '../utils/projectSettings';
 
 import CheckInStats from '../components/checkin/CheckInStats';
 import RealtimeFeed from '../components/checkin/RealtimeFeed';
 import CheckInDisplayHeader, { formatCheckInRemainingTime } from '../components/checkin/CheckInDisplayHeader';
 import CheckInQrModal from '../components/checkin/CheckInQrModal';
+import CheckInManagementModal from '../components/checkin/CheckInManagementModal';
 import { useUiAppearance } from '../contexts/UiAppearanceContext';
-
-// 祝福语列表
-const GREETINGS = [
-  '欢迎参加年度盛典',
-  '祝您今晚好运连连',
-  '愿您今晚满载而归',
-  '欢迎开启幸运之旅',
-  '欢迎来到活动现场',
-];
 
 // 签到时长选项（分钟）
 const DURATION_OPTIONS = [
@@ -66,24 +62,20 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
   const targetEventId = propEventId || urlEventId;
   // 状态
   const [event, setEvent] = useState<LuckEvent | null>(null);
+  const [isAdmin, setIsAdmin] = useState<boolean>(searchParams.get('mode') === 'admin');
   const [records, setRecords] = useState<LuckCheckIn[]>([]);
   const [settings, setSettings] = useState<CheckInSettings | null>(null);
-  const [latestRecord, setLatestRecord] = useState<LuckCheckIn | null>(null);
-  const [showLatestAnimation, setShowLatestAnimation] = useState(false);
-  const [greeting, setGreeting] = useState('');
   const [_isFullscreen, setIsFullscreen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showQRModal, setShowQRModal] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [showManagementModal, setShowManagementModal] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [participantListCount, setParticipantListCount] = useState(0);
+  const [employeeIdPrefix, setEmployeeIdPrefix] = useState('U');
 
-  
-  // 签到队列：支持多人同时签到时依次展示
-  const [checkInQueue, setCheckInQueue] = useState<LuckCheckIn[]>([]);
-  const [isProcessingQueue, setIsProcessingQueue] = useState(false);
-  
   // 签到会话管理状态
-  const [showStartModal, setShowStartModal] = useState(true); // 进入时显示开始弹窗
+  const [showStartModal, setShowStartModal] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
   const [remainingTime, setRemainingTime] = useState<number | null>(null); // 剩余秒数
   const [selectedDuration, setSelectedDuration] = useState(15); // 默认15分钟
@@ -125,20 +117,33 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
       
       if (activeEvent) {
         setEvent(activeEvent);
+
+        // 异步检查管理员权限
+        const isOwnerOrAdmin = await checkIsEventAdmin(activeEvent.id);
+        const resolvedIsAdmin = isOwnerOrAdmin || searchParams.get('mode') === 'admin';
+        setIsAdmin(resolvedIsAdmin);
         
         // 获取签到记录
         const checkIns = await getCheckInRecords(activeEvent.id, 50);
         setRecords(checkIns);
-        setLatestRecord(checkIns[0] ?? null);
         
         // 获取签到人数
         const count = await getCheckInCount(activeEvent.id);
         
         // 从数据库获取参与者总数
         const totalCount = await getParticipantCount(activeEvent.id);
+        setParticipantListCount(totalCount || 0);
+
+        // 加载项目自定义设置（目标总人数及工号前缀）
+        const dbSettings = await loadProjectSettings(activeEvent.id);
+        const configuredTarget = typeof dbSettings?.targetParticipants === 'number' && dbSettings.targetParticipants > 0
+          ? dbSettings.targetParticipants
+          : (totalCount || 100);
+        const configuredPrefix = getEmployeeIdPrefixFromSettings(dbSettings);
+        setEmployeeIdPrefix(configuredPrefix);
         
         // 更新统计
-        updateStats(checkIns, count, totalCount || 100);
+        updateStats(checkIns, count, configuredTarget);
         
         // 检查签到会话状态
         const sessionStatus = await getCheckInSessionStatus(activeEvent.id);
@@ -148,6 +153,9 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
           if (sessionStatus.remainingSeconds) {
             setRemainingTime(sessionStatus.remainingSeconds);
           }
+        } else if (resolvedIsAdmin) {
+          // 仅管理员且未开启时提示开启弹窗
+          setShowStartModal(true);
         }
       }
     };
@@ -248,59 +256,14 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
     });
   };
 
-  // 实时订阅签到记录
-  useEffect(() => {
-    if (!event) return;
+  const lastSoundTimeRef = useRef<number>(0);
 
-    const unsubscribe = subscribeToCheckIns(event.id, (newCheckIn) => {
-      setRecords(prev => [newCheckIn, ...prev.slice(0, 49)]);
-      // setCheckInCount(prev => prev + 1) removed
-      
-      // 加入队列而不是直接展示
-      setCheckInQueue(prev => [...prev, newCheckIn]);
-      
-      // 更新统计
-      setStats(prev => ({
-        ...prev,
-        checkedInCount: prev.checkedInCount + 1,
-        checkInPercentage: Math.round(((prev.checkedInCount + 1) / prev.totalParticipants) * 100),
-        lastCheckInTime: newCheckIn.check_in_time,
-      }));
-    });
-
-    return unsubscribe;
-  }, [event]);
-
-  // 处理签到队列：依次展示每个签到
-  useEffect(() => {
-    if (checkInQueue.length === 0 || isProcessingQueue) return;
-    
-    setIsProcessingQueue(true);
-    
-    // 取出队列中的第一个
-    const nextCheckIn = checkInQueue[0];
-    setLatestRecord(nextCheckIn);
-    setGreeting(GREETINGS[Math.floor(Math.random() * GREETINGS.length)]);
-    setShowLatestAnimation(true);
-    
-    // 播放提示音
-    if (soundEnabled) {
-      playCheckInSound();
-    }
-    
-    // 3秒后隐藏动画并处理下一个
-    setTimeout(() => {
-      setShowLatestAnimation(false);
-      setCheckInQueue(prev => prev.slice(1)); // 移除已处理的
-      setIsProcessingQueue(false);
-    }, 3000);
-  }, [checkInQueue, isProcessingQueue, soundEnabled]);
-
-  // 处理新签到（保留作为备用）
-
-
-  // 播放签到提示音
+  // 播放签到提示音（限制最小间隔 200ms）
   const playCheckInSound = () => {
+    const now = Date.now();
+    if (now - lastSoundTimeRef.current < 200) return;
+    lastSoundTimeRef.current = now;
+
     try {
       const audioContext = new (window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
       const oscillator = audioContext.createOscillator();
@@ -323,6 +286,39 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
     }
   };
 
+  // 实时订阅签到记录
+  useEffect(() => {
+    if (!event) return;
+
+    const unsubscribe = subscribeToCheckIns(event.id, (newCheckIn) => {
+      // 播放提示音
+      if (soundEnabled) {
+        playCheckInSound();
+      }
+
+      setRecords(prev => {
+        // 防止重复插入相同记录
+        if (prev.some(r => r.id === newCheckIn.id || (r.employee_id === newCheckIn.employee_id && r.event_id === newCheckIn.event_id))) {
+          return prev;
+        }
+        return [newCheckIn, ...prev];
+      });
+      
+      // 更新统计
+      setStats(prev => ({
+        ...prev,
+        checkedInCount: prev.checkedInCount + 1,
+        checkInPercentage: Math.round(((prev.checkedInCount + 1) / prev.totalParticipants) * 100),
+        lastCheckInTime: newCheckIn.check_in_time,
+      }));
+    });
+
+    return unsubscribe;
+  }, [event, soundEnabled]);
+
+  // 处理新签到（保留作为备用）
+
+
   // 刷新数据
   const refreshData = async () => {
     if (!event) return;
@@ -333,10 +329,93 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
       const count = await getCheckInCount(event.id);
       const totalCount = await getParticipantCount(event.id);
       setRecords(checkIns);
-      setLatestRecord(checkIns[0] ?? null);
       updateStats(checkIns, count, totalCount || undefined);
     } catch {
       setActionError('刷新失败，已保留当前数据');
+    }
+  };
+
+  // 修改并保存目标签到总人数
+  const handleSaveTotalParticipants = async (newTotal: number) => {
+    if (!event || newTotal <= 0) return;
+    setActionError('');
+    try {
+      await saveProjectSettings(event.id, { targetParticipants: newTotal });
+      setStats(prev => ({
+        ...prev,
+        totalParticipants: newTotal,
+        checkInPercentage: Math.round((prev.checkedInCount / newTotal) * 100),
+      }));
+    } catch {
+      setActionError('保存总人数失败，请稍后重试');
+    }
+  };
+
+  // 修改并保存工号前缀
+  const handleSaveEmployeeIdPrefix = async (newPrefix: string) => {
+    if (!event) return;
+    setActionError('');
+    try {
+      await saveProjectSettings(event.id, { employeeIdPrefix: newPrefix });
+      setEmployeeIdPrefix(newPrefix);
+    } catch {
+      setActionError('保存工号前缀失败，请稍后重试');
+    }
+  };
+
+  // 清除已签到记录（重置为未签到状态）
+  const handleResetCheckIns = async () => {
+    if (!event) return;
+    setActionError('');
+    try {
+      const success = await resetCheckInStatusForEvent(event.id);
+      if (!success) throw new Error('reset failed');
+
+      // 本地缓存同步清空
+      clearCheckInRecords();
+
+      // 重置大屏状态
+      setRecords([]);
+      setStats(prev => ({
+        ...prev,
+        checkedInCount: 0,
+        checkInPercentage: 0,
+        lastCheckInTime: undefined,
+        departmentStats: [],
+      }));
+    } catch {
+      setActionError('清除已签到记录失败，请重试');
+    }
+  };
+
+  // 初始化标准演示名单并直接完成签到入场
+  const handleInitSampleParticipants = async (count: number = 30, prefix?: string) => {
+    if (!event) return;
+    setActionError('');
+    try {
+      const res = await initDefaultParticipants(event.id, count, prefix || employeeIdPrefix);
+      if (!res.success) throw new Error(res.error || 'init sample failed');
+
+      // 刷新名单总人数与签到记录
+      setParticipantListCount(res.count);
+      await refreshData();
+    } catch {
+      setActionError('初始化演示名单失败，请重试');
+    }
+  };
+
+  // 清空全部参会人员名单
+  const handleClearAllParticipants = async () => {
+    if (!event) return;
+    setActionError('');
+    try {
+      const success = await clearAllParticipantsForEvent(event.id);
+      if (!success) throw new Error('clear all failed');
+
+      setParticipantListCount(0);
+      await handleResetCheckIns();
+    } catch {
+      setActionError('清空参会人员失败，请重试');
     }
   };
 
@@ -393,12 +472,13 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
           currentTime={currentTime}
           soundEnabled={soundEnabled}
           onBack={onBack}
-          onStart={() => setShowStartModal(true)}
-          onEnd={() => setShowEndConfirm(true)}
+          onStart={isAdmin ? () => setShowStartModal(true) : undefined}
+          onEnd={isAdmin ? () => setShowEndConfirm(true) : undefined}
           onRefresh={() => void refreshData()}
           onToggleSound={() => setSoundEnabled(current => !current)}
           onShowQr={() => setShowQRModal(true)}
           onToggleFullscreen={toggleFullscreen}
+          onOpenManagement={isAdmin ? () => setShowManagementModal(true) : undefined}
         />
 
         {actionError && (
@@ -410,77 +490,31 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
         {/* 主体区域 */}
         <main className="checkin-stage-grid">
           
-          {/* 左侧：实时动态 */}
+          {/* 左侧：实时下雨动态掉落签到池 */}
           <div className="checkin-stage-panel checkin-live-panel">
             <RealtimeFeed 
               records={convertedRecords}
-              maxDisplay={settings?.maxDisplayCount || 15}
-              animationStyle={settings?.animationStyle || 'slide'}
+              maxDisplay={100}
             />
           </div>
 
-          {/* 右侧：统计 + 最新签到 */}
+          {/* 右侧：右上二维码 + 右下人数统计看板 */}
           <aside className="checkin-stage-sidebar">
-            
-            {/* 统计信息 */}
             <CheckInStats 
               totalParticipants={stats.totalParticipants}
               checkedInCount={stats.checkedInCount}
               checkInPercentage={stats.checkInPercentage}
               lastCheckInTime={stats.lastCheckInTime}
-              departmentStats={stats.departmentStats}
-              showDepartmentStats={settings?.showDepartmentStats ?? true}
               variant="large"
+              onEditTotal={isAdmin ? () => setShowManagementModal(true) : undefined}
+              checkInUrl={getCheckInUrl()}
+              checkInOpen={checkInOpen}
+              onOpenQrModal={() => setShowQRModal(true)}
+              onStartCheckIn={isAdmin ? () => setShowStartModal(true) : undefined}
             />
-
           </aside>
         </main>
       </div>
-
-      {/* 新签到弹出动画 */}
-      {showLatestAnimation && latestRecord && (
-        <div className="vip-modal-backdrop checkin-welcome-backdrop fixed inset-0 z-50 flex items-center justify-center animate-fadeIn">
-          <div className="checkin-welcome-wrap relative animate-bounceIn">
-            {/* 背景光效 */}
-            <div className="checkin-welcome-glow" />
-            
-            {/* 卡片 */}
-            <div className="checkin-welcome-card">
-              {/* 顶部装饰 */}
-              <div className="checkin-welcome-badge">
-                <Sparkles size={16} />
-                <span>签到成功</span>
-              </div>
-              
-              {/* 头像 */}
-              <div className="flex justify-center mb-6 mt-4">
-                <div className="relative">
-                  <img
-                    src={latestRecord.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${latestRecord.employee_id}`}
-                    alt={latestRecord.name}
-                    className="checkin-welcome-avatar"
-                  />
-                  <div className="checkin-welcome-check animate-bounce">
-                    <Check size={20} />
-                  </div>
-                </div>
-              </div>
-              
-              {/* 信息 */}
-              <div className="text-center">
-                <h2 className="checkin-welcome-name">{latestRecord.name}</h2>
-                <p className="checkin-welcome-department">{latestRecord.department || '未知部门'}</p>
-                <p className="checkin-welcome-id">{latestRecord.employee_id}</p>
-                
-                {/* 祝福语 */}
-                <div className="checkin-welcome-message">
-                  <p>{greeting}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       <CheckInQrModal
         open={showQRModal}
@@ -488,6 +522,20 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
         checkInUrl={getCheckInUrl()}
         remainingLabel={checkInOpen && remainingTime !== null ? formatCheckInRemainingTime(remainingTime) : null}
         onClose={() => setShowQRModal(false)}
+      />
+
+      <CheckInManagementModal
+        open={showManagementModal}
+        totalParticipants={stats.totalParticipants}
+        checkedInCount={stats.checkedInCount}
+        participantListCount={participantListCount}
+        employeeIdPrefix={employeeIdPrefix}
+        onClose={() => setShowManagementModal(false)}
+        onSaveTotalParticipants={handleSaveTotalParticipants}
+        onSaveEmployeeIdPrefix={handleSaveEmployeeIdPrefix}
+        onResetCheckIns={handleResetCheckIns}
+        onInitSampleParticipants={handleInitSampleParticipants}
+        onClearAllParticipants={handleClearAllParticipants}
       />
 
       {showEndConfirm && (

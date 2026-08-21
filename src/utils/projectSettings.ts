@@ -41,6 +41,9 @@ export interface ProjectSettings {
   wheelSubtitle?: string;
   wheelSubtitleEn?: string;
   formFields?: unknown[];
+  // 签到设置
+  targetParticipants?: number;
+  employeeIdPrefix?: string;
   // 允许其他自定义字段
   [key: string]: unknown;
 }
@@ -122,6 +125,16 @@ export const getBackgroundMusicFromSettings = (settings: ProjectSettings): Backg
     };
   }
   return DEFAULT_BACKGROUND_MUSIC;
+};
+
+/**
+ * 从项目设置中解析工号前缀（默认 'U'）
+ */
+export const getEmployeeIdPrefixFromSettings = (settings?: ProjectSettings | null): string => {
+  if (settings && typeof settings.employeeIdPrefix === 'string') {
+    return settings.employeeIdPrefix.trim().toUpperCase();
+  }
+  return 'U';
 };
 
 // ============================================

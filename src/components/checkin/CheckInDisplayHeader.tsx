@@ -5,6 +5,7 @@ import {
   Play,
   QrCode,
   RefreshCw,
+  SlidersHorizontal,
   Square,
   Sparkles,
   Timer,
@@ -21,12 +22,13 @@ interface CheckInDisplayHeaderProps {
   currentTime: Date;
   soundEnabled: boolean;
   onBack?: () => void;
-  onStart: () => void;
-  onEnd: () => void;
+  onStart?: () => void;
+  onEnd?: () => void;
   onRefresh: () => void;
   onToggleSound: () => void;
   onShowQr: () => void;
   onToggleFullscreen: () => void;
+  onOpenManagement?: () => void;
 }
 
 export const formatCheckInRemainingTime = (seconds: number): string => {
@@ -53,6 +55,7 @@ const CheckInDisplayHeader = ({
   onToggleSound,
   onShowQr,
   onToggleFullscreen,
+  onOpenManagement,
 }: CheckInDisplayHeaderProps) => (
   <header className="checkin-command-bar">
     <div className="checkin-brand-block">
@@ -92,20 +95,29 @@ const CheckInDisplayHeader = ({
             </span>
             {remainingTime !== null && <small>剩余</small>}
           </div>
-          <button
-            type="button"
-            onClick={onEnd}
-            aria-label="结束签到"
-            className="checkin-end-button"
-          >
-            <Square size={15} aria-hidden="true" />
-            <span className="hidden lg:inline">结束签到</span>
-          </button>
+          {onEnd && (
+            <button
+              type="button"
+              onClick={onEnd}
+              aria-label="结束签到"
+              className="checkin-end-button"
+            >
+              <Square size={15} aria-hidden="true" />
+              <span className="hidden lg:inline">结束签到</span>
+            </button>
+          )}
         </>
       ) : (
-        <button type="button" onClick={onStart} aria-label="开始签到" className="checkin-start-button">
-          <Play size={17} aria-hidden="true" /> 开始签到
-        </button>
+        onStart ? (
+          <button type="button" onClick={onStart} aria-label="开始签到" className="checkin-start-button">
+            <Play size={17} aria-hidden="true" /> 开始签到
+          </button>
+        ) : (
+          <div className="checkin-session-pill opacity-75">
+            <Timer size={16} aria-hidden="true" />
+            <span>签到未开启</span>
+          </div>
+        )
       )}
 
       <div className="checkin-current-time">
@@ -114,6 +126,11 @@ const CheckInDisplayHeader = ({
       </div>
 
       <div className="checkin-tool-group">
+        {onOpenManagement && (
+          <button type="button" onClick={onOpenManagement} aria-label="签到与名单管理" title="签到与名单管理" className={toolButtonClass}>
+            <SlidersHorizontal size={18} aria-hidden="true" />
+          </button>
+        )}
         <button type="button" onClick={onRefresh} aria-label="刷新数据" className={toolButtonClass}><RefreshCw size={18} aria-hidden="true" /></button>
         <button type="button" onClick={onToggleSound} aria-label={soundEnabled ? '关闭提示音' : '开启提示音'} className={toolButtonClass}>
           {soundEnabled ? <Volume2 size={18} aria-hidden="true" /> : <VolumeX size={18} aria-hidden="true" />}

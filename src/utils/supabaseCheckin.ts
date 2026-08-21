@@ -211,12 +211,13 @@ export const checkIn = async (params: CheckInParams): Promise<{ success: boolean
 };
 
 export const getCheckInByEmployee = async (eventId: string, employeeId: string): Promise<LuckCheckIn | null> => {
+  const cleanId = employeeId.trim().toUpperCase();
   const { data, error } = await supabase
     .from('luck_check_ins')
     .select('*')
     .eq('event_id', eventId)
-    .eq('employee_id', employeeId)
-    .single();
+    .eq('employee_id', cleanId)
+    .maybeSingle();
 
   if (error) {
     return null;
@@ -542,19 +543,105 @@ export const getParticipantCount = async (eventId: string): Promise<number> => {
 };
 
 /**
- * 清空活动的所有签到记录
+ * 清空活动的所有签到记录并重置参与者签到状态为 pending
  */
-export const clearCheckInRecordsForEvent = async (eventId: string): Promise<boolean> => {
-  const { error } = await supabase
-    .from('luck_check_ins')
-    .delete()
-    .eq('event_id', eventId);
+export const resetCheckInStatusForEvent = async (eventId: string): Promise<boolean> => {
+  try {
+    // 1. 清空签到记录
+    const { error: checkInError } = await supabase
+      .from('luck_check_ins')
+      .delete()
+      .eq('event_id', eventId);
 
-  if (error) {
-    console.error('清空签到记录失败:', error);
+    if (checkInError) {
+      console.error('清空签到记录失败:', checkInError);
+      return false;
+    }
+
+    // 2. 将参与者状态重置为 pending（未签到）
+    const { error: participantError } = await supabase
+      .from('luck_participants')
+      .update({
+        status: 'pending',
+        check_in_time: null,
+      })
+      .eq('event_id', eventId);
+
+    if (participantError) {
+      console.error('重置参与者状态失败:', participantError);
+      // 部分旧表可能没有 check_in_time 列，降级仅更新 status
+      await supabase
+        .from('luck_participants')
+        .update({ status: 'pending' })
+        .eq('event_id', eventId);
+    }
+
+    return true;
+  } catch (err) {
+    console.error('重置签到状态异常:', err);
     return false;
   }
-  return true;
+};
+
+/**
+ * 清空活动的所有签到记录（兼容旧接口）
+ */
+export const clearCheckInRecordsForEvent = async (eventId: string): Promise<boolean> => {
+  return resetCheckInStatusForEvent(eventId);
+};
+
+/**
+ * 清空活动的所有参会人员及签到数据
+ */
+export const clearAllParticipantsForEvent = async (eventId: string): Promise<boolean> => {
+  try {
+    await supabase.from('luck_check_ins').delete().eq('event_id', eventId);
+    const { error } = await supabase.from('luck_participants').delete().eq('event_id', eventId);
+    if (error) {
+      console.error('清空参会人员失败:', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('清空参会人员异常:', err);
+    return false;
+  }
+};
+
+/**
+ * 初始化默认标准演示名单并直接完成签到入场
+ * 1. 优先调用后端 RPC 函数 init_demo_participants（安全、原子事务、绕过前端 RLS 限制）
+ * 2. 自动生成 30 位已签到参与者与 luck_check_ins 签到流水
+ * 3. 签到大屏与抽奖大屏即可直接使用这 30 人进行全流程演示！
+ */
+export const initDefaultParticipants = async (
+  eventId: string,
+  count: number = 30,
+  prefix: string = 'U'
+): Promise<{ success: boolean; count: number; error?: string }> => {
+  const cleanPrefix = (prefix || 'U').trim().toUpperCase();
+
+  try {
+    const { data, error } = await supabase.rpc('init_demo_participants', {
+      p_event_id: eventId,
+      p_count: count,
+      p_prefix: cleanPrefix,
+    });
+
+    if (!error && data && (data as any).success) {
+      return { success: true, count: (data as any).count || count };
+    }
+
+    if (error) {
+      console.error('调用 init_demo_participants RPC 失败:', error);
+      return { success: false, count: 0, error: error.message || '生成演示名单失败' };
+    }
+
+    return { success: true, count };
+  } catch (err: any) {
+    console.error('初始化演示名单异常:', err);
+    return { success: false, count: 0, error: err?.message || '初始化过程发生错误' };
+  }
 };
 
 // ============================================
@@ -730,6 +817,49 @@ export const getCurrentUser = async (): Promise<LuckUser | null> => {
     .single();
 
   return data as LuckUser | null;
+};
+
+/**
+ * 检查当前登录用户是否为指定活动的管理员/所有者
+ */
+export const checkIsEventAdmin = async (eventId: string): Promise<boolean> => {
+  if (!eventId) return false;
+  try {
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    if (!authUser) return false;
+
+    // 获取当前活动信息
+    const { data: event, error } = await supabase
+      .from('luck_events')
+      .select('owner_id')
+      .eq('id', eventId)
+      .maybeSingle();
+
+    if (error || !event) return false;
+
+    // 1. 如果 event.owner_id 直接与 auth.users 的 id 一致
+    if (event.owner_id === authUser.id) {
+      return true;
+    }
+
+    // 2. 检查 luck_users 表中的对应关联记录或 admin 角色
+    const { data: luckUser } = await supabase
+      .from('luck_users')
+      .select('id, role')
+      .eq('auth_id', authUser.id)
+      .maybeSingle();
+
+    if (luckUser) {
+      if (luckUser.role === 'admin' || luckUser.id === event.owner_id) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch (err) {
+    console.error('检查管理员权限失败:', err);
+    return false;
+  }
 };
 
 // ============================================
@@ -958,6 +1088,71 @@ export const deletePrize = async (prizeId: string): Promise<boolean> => {
   }
 
   return true;
+};
+
+/**
+ * 将前端奖项列表同步至 Supabase luck_prizes 表
+ * 保持 sort_order 顺序、更新已有奖项、新增奖项、删除多余奖项
+ */
+export const syncEventPrizes = async (
+  eventId: string,
+  prizes: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    image?: string;
+    count: number;
+    drawn: number;
+  }>
+): Promise<LuckPrize[]> => {
+  if (!eventId) return [];
+
+  try {
+    const dbPrizes = await getPrizes(eventId);
+    const dbPrizeMap = new Map(dbPrizes.map(p => [p.id, p]));
+    const targetPrizeIds = new Set<string>();
+
+    for (let index = 0; index < prizes.length; index++) {
+      const prize = prizes[index];
+      const existing = dbPrizeMap.get(prize.id);
+      const remaining = Math.max(0, prize.count - (prize.drawn || 0));
+
+      if (existing) {
+        targetPrizeIds.add(existing.id);
+        await updatePrize(existing.id, {
+          name: prize.name,
+          description: prize.description || null,
+          image: prize.image || null,
+          quantity: prize.count,
+          remaining,
+          sort_order: index,
+        });
+      } else {
+        const created = await createPrize(eventId, {
+          name: prize.name,
+          description: prize.description,
+          image: prize.image,
+          quantity: prize.count,
+          sort_order: index,
+        });
+        if (created) {
+          targetPrizeIds.add(created.id);
+        }
+      }
+    }
+
+    // 删除多余奖项
+    for (const dbPrize of dbPrizes) {
+      if (!targetPrizeIds.has(dbPrize.id)) {
+        await deletePrize(dbPrize.id);
+      }
+    }
+
+    return await getPrizes(eventId);
+  } catch (error) {
+    console.error('同步活动奖项配置失败:', error);
+    return await getPrizes(eventId);
+  }
 };
 
 // ============================================
@@ -1340,3 +1535,56 @@ export const getWheelStats = async (eventId: string): Promise<{
     remainingPrizes,
   };
 };
+
+/**
+ * 撤销中奖记录（恢复奖项库存并删除中奖记录）
+ */
+export const undoRollingWinner = async (
+  eventId: string,
+  winnerId: string
+): Promise<{ success: boolean; error?: string }> => {
+  if (!eventId || !winnerId) {
+    return { success: false, error: '缺少活动ID或记录ID' };
+  }
+
+  try {
+    const { error } = await supabase.rpc('undo_rolling_winner', {
+      p_event_id: eventId,
+      p_winner_id: winnerId,
+    });
+
+    if (error) {
+      console.warn('RPC 撤销失败，执行 Client Fallback:', error);
+      // Fallback: 客户端直接操作
+      const { data: winner } = await supabase
+        .from('luck_winners')
+        .select('*')
+        .eq('id', winnerId)
+        .eq('event_id', eventId)
+        .maybeSingle();
+
+      if (winner) {
+        await supabase.from('luck_winners').delete().eq('id', winnerId);
+        if (winner.prize_id) {
+          const { data: prize } = await supabase
+            .from('luck_prizes')
+            .select('quantity, remaining')
+            .eq('id', winner.prize_id)
+            .maybeSingle();
+          if (prize) {
+            await supabase
+              .from('luck_prizes')
+              .update({ remaining: Math.min(prize.quantity, prize.remaining + 1) })
+              .eq('id', winner.prize_id);
+          }
+        }
+      }
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('撤销中奖记录异常:', err);
+    return { success: false, error: err.message || '撤销失败' };
+  }
+};
+

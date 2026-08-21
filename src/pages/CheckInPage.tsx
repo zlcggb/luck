@@ -21,8 +21,10 @@ import {
   checkIn,
   getActiveEvent,
   getEvent,
+  getCheckInByEmployee,
   isCheckInOpen
 } from '../utils/supabaseCheckin';
+import { loadProjectSettings, getEmployeeIdPrefixFromSettings } from '../utils/projectSettings';
 
 // 页面状态
 type PageState = 
@@ -64,12 +66,29 @@ const CheckInPage = () => {
 
   // 轮动式状态
   const [employeeId, setEmployeeId] = useState('');
+  const [employeeIdPrefix, setEmployeeIdPrefix] = useState('U');
   const [rollingName, setRollingName] = useState('');
   const [searchError, setSearchError] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const [returnCountdown, setReturnCountdown] = useState(10);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const normalizeEmployeeId = (input: string, prefix: string) => {
+    const raw = input.trim().toUpperCase();
+    if (!raw) return '';
+    const cleanPrefix = (prefix || '').trim().toUpperCase();
+    if (cleanPrefix) {
+      if (raw.startsWith(cleanPrefix)) {
+        return raw;
+      }
+      if (/^\d+$/.test(raw)) {
+        return `${cleanPrefix}${raw}`;
+      }
+    }
+    return raw;
+  };
 
   const clearRedirectTimer = () => {
     if (redirectTimerRef.current) {
@@ -88,6 +107,32 @@ const CheckInPage = () => {
     const eventQuery = `event=${encodeURIComponent(event.id)}`;
     navigate(`/lottery/personal-wheel?${eventQuery}`);
   };
+
+  const goToLotteryScreen = () => {
+    clearRedirectTimer();
+    if (event?.id) {
+      navigate(`/lottery?event=${encodeURIComponent(event.id)}`);
+    } else {
+      navigate('/lottery');
+    }
+  };
+
+  // 签到完成后 10 秒自动倒计时进入抽奖页面
+  useEffect(() => {
+    if (pageState !== 'success' && pageState !== 'already_checked') return;
+    if (event?.mode !== 'rolling') return;
+
+    if (returnCountdown <= 0) {
+      goToLotteryScreen();
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setReturnCountdown(prev => prev - 1);
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [pageState, returnCountdown, event]);
 
   useEffect(() => {
     const init = async () => {
@@ -112,6 +157,11 @@ const CheckInPage = () => {
           setPageState('closed');
           return;
         }
+
+        // 读取活动配置中的工号前缀
+        const dbSettings = await loadProjectSettings(activeEvent.id);
+        const prefix = getEmployeeIdPrefixFromSettings(dbSettings);
+        setEmployeeIdPrefix(prefix);
       } else {
         setError('暂无进行中的展会活动');
         setPageState('error');
@@ -187,7 +237,7 @@ const CheckInPage = () => {
 
   const handleRollingSubmit = async () => {
     if (!event) return;
-    const trimmedId = employeeId.trim().toUpperCase();
+    const trimmedId = normalizeEmployeeId(employeeId, employeeIdPrefix);
     const trimmedName = rollingName.trim();
 
     if (!trimmedName) { setSearchError('请输入您的姓名'); return; }
@@ -197,13 +247,21 @@ const CheckInPage = () => {
     setSearchError('');
 
     try {
+      // 1. 根据工号查重：检查是否已经签到过
+      const existingRecord = await getCheckInByEmployee(event.id, trimmedId);
+      if (existingRecord) {
+        setCheckInRecord(existingRecord);
+        setPageState('already_checked');
+        return;
+      }
+
       // 需要位置验证则先获取位置
       if (event.require_location) {
         setPageState('get_location');
         return;
       }
 
-      // 直接签到（checkIn 内部会自动同步到 luck_participants）
+      // 2. 直接签到（checkIn 内部会自动同步到 luck_participants）
       setPageState('checking_in');
       const result = await checkIn({
         eventId: event.id,
@@ -237,11 +295,20 @@ const CheckInPage = () => {
   // 轮动式位置验证后的签到回调
   const handleRollingCheckInAfterLocation = async () => {
     if (!event) return;
-    setPageState('checking_in');
+    const trimmedId = normalizeEmployeeId(employeeId, employeeIdPrefix);
     try {
+      // 位置验证后也先查重
+      const existingRecord = await getCheckInByEmployee(event.id, trimmedId);
+      if (existingRecord) {
+        setCheckInRecord(existingRecord);
+        setPageState('already_checked');
+        return;
+      }
+
+      setPageState('checking_in');
       const result = await checkIn({
         eventId: event.id,
-        employeeId: employeeId.trim().toUpperCase(),
+        employeeId: trimmedId,
         name: rollingName.trim(),
         location: location || undefined,
       });
@@ -457,14 +524,31 @@ const CheckInPage = () => {
           {/* 工号 */}
           <div className="group">
             <label className="block text-white/50 text-xs font-semibold uppercase tracking-wider mb-2 pl-1">工号</label>
-            <div className="relative">
-              <Hash size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" />
+            <div className="relative flex items-center">
+              {employeeIdPrefix ? (
+                <div className="absolute left-3 z-10 flex items-center pointer-events-none">
+                  <span className="flex h-8 items-center justify-center rounded-xl bg-blue-500/20 px-2.5 text-sm font-bold tracking-wider text-blue-400 border border-blue-500/30 shadow-sm select-none">
+                    {employeeIdPrefix}
+                  </span>
+                </div>
+              ) : (
+                <Hash size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40 pointer-events-none" />
+              )}
               <input
                 type="text"
+                inputMode={employeeIdPrefix ? "numeric" : "text"}
                 value={employeeId}
-                onChange={(e) => { setEmployeeId(e.target.value.toUpperCase()); setSearchError(''); }}
-                placeholder="请输入您的工号"
-                className="w-full pl-11 pr-4 py-4 bg-black/20 border border-white/10 rounded-2xl text-white text-[17px] placeholder-white/30 focus:outline-none focus:border-blue-400/50 focus:bg-black/40 transition-all font-medium tracking-wider"
+                onChange={(e) => {
+                  let val = e.target.value.trim().toUpperCase();
+                  if (employeeIdPrefix && val.startsWith(employeeIdPrefix)) {
+                    val = val.slice(employeeIdPrefix.length);
+                  }
+                  setEmployeeId(val);
+                  setSearchError('');
+                }}
+                placeholder={employeeIdPrefix ? "请输入工号数字 (如 0015098)" : "请输入您的工号"}
+                style={{ paddingLeft: employeeIdPrefix ? `${Math.max(employeeIdPrefix.length * 12 + 28, 52)}px` : undefined }}
+                className={`w-full ${!employeeIdPrefix ? 'pl-11' : ''} pr-4 py-4 bg-black/20 border border-white/10 rounded-2xl text-white text-[17px] placeholder-white/30 focus:outline-none focus:border-blue-400/50 focus:bg-black/40 transition-all font-medium tracking-wider`}
                 onKeyDown={(e) => e.key === 'Enter' && handleRollingSubmit()}
               />
             </div>
@@ -611,9 +695,9 @@ const CheckInPage = () => {
       <div className="apple-glass rounded-3xl p-6 w-full mb-8">
         {event?.mode === 'rolling' ? (
           <>
-            <p className="text-lg text-white font-medium mb-1">{rollingName || checkInRecord?.name}</p>
-            <p className="text-white/60 text-sm">
-              {employeeId || checkInRecord?.employee_id}
+            <p className="text-lg text-white font-semibold mb-1">{checkInRecord?.name || rollingName}</p>
+            <p className="text-white/80 text-sm font-semibold tracking-wider">
+              {checkInRecord?.employee_id || normalizeEmployeeId(employeeId, employeeIdPrefix)}
             </p>
             <p className="text-green-400 text-sm mt-3 font-medium">✨ 您已获得抽奖资格</p>
           </>
@@ -626,7 +710,20 @@ const CheckInPage = () => {
       </div>
 
       {event?.mode === 'rolling' ? (
-        <p className="text-white/60 text-sm">请留意大屏幕，开奖即将开始 🎉</p>
+        <div className="w-full space-y-4">
+          <button
+            type="button"
+            onClick={goToLotteryScreen}
+            className="w-full py-4 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-2xl text-[17px] font-bold shadow-[0_0_30px_rgba(59,130,246,0.3)] hover:shadow-[0_0_40px_rgba(59,130,246,0.5)] transition-all hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-2"
+          >
+            <span>进入活动抽奖</span>
+            <ArrowRight size={20} />
+          </button>
+
+          <p className="text-white/60 text-xs">
+            {returnCountdown > 0 ? `${returnCountdown} 秒后将自动进入抽奖页面 · 请留意现场大屏` : '正在进入活动抽奖...'}
+          </p>
+        </div>
       ) : (
         <>
           <p className="text-white/80 animate-pulse text-[17px]">即将进入抽奖活动...</p>
@@ -643,18 +740,53 @@ const CheckInPage = () => {
 
   const renderAlreadyChecked = () => (
     <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center animate-fade-in max-w-lg mx-auto w-full">
-      <div className="w-24 h-24 rounded-full bg-blue-500/20 border-2 border-blue-400 flex items-center justify-center mb-8">
+      <div className="w-24 h-24 rounded-full bg-blue-500/20 border-2 border-blue-400 flex items-center justify-center mb-6">
         <User size={40} className="text-blue-400" />
       </div>
       
-      <h2 className="large-title-emphasized text-white mb-4">您已签到过</h2>
-      <p className="text-white/60 mb-8">
+      <h2 className="large-title-emphasized text-white mb-2">您已签到过</h2>
+      <p className="text-white/60 mb-6 text-sm">
         {event?.mode === 'rolling' 
-          ? '您已完成签到，请留意大屏开奖' 
+          ? '该工号已完成签到，请勿重复签到，请留意大屏开奖' 
           : '信息保留完毕，将自动为您跳转到抽奖页面'}
       </p>
 
-      {event?.mode !== 'rolling' && (
+      {/* 签到信息卡片 */}
+      <div className="apple-glass rounded-3xl p-6 w-full mb-6 text-center">
+        {event?.mode === 'rolling' ? (
+          <>
+            <p className="text-lg text-white font-semibold mb-1">{checkInRecord?.name || rollingName}</p>
+            <p className="text-white/80 text-sm font-semibold tracking-wider">
+              {checkInRecord?.employee_id || normalizeEmployeeId(employeeId, employeeIdPrefix)}
+            </p>
+            {checkInRecord?.department && (
+              <p className="text-white/40 text-xs mt-1">{checkInRecord.department}</p>
+            )}
+            <p className="text-green-400 text-sm mt-3 font-medium">✨ 已具备抽奖资格</p>
+          </>
+        ) : (
+          <>
+            <p className="text-lg text-white font-medium mb-1">{checkInRecord?.name || formData.name}</p>
+            <p className="text-white/60 text-sm">{checkInRecord?.department || formData.company} | {checkInRecord?.employee_id || formData.phone}</p>
+          </>
+        )}
+      </div>
+
+      {event?.mode === 'rolling' ? (
+        <div className="w-full space-y-3">
+          <button
+            type="button"
+            onClick={goToLotteryScreen}
+            className="w-full py-4 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-2xl text-[17px] font-bold shadow-[0_0_30px_rgba(59,130,246,0.3)] hover:shadow-[0_0_40px_rgba(59,130,246,0.5)] transition-all hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-2"
+          >
+            <span>进入活动抽奖</span>
+            <ArrowRight size={20} />
+          </button>
+          <p className="text-white/60 text-xs">
+            {returnCountdown > 0 ? `${returnCountdown} 秒后将自动进入抽奖页面` : '正在进入活动抽奖...'}
+          </p>
+        </div>
+      ) : (
         <button
           onClick={() => goToPersonalWheel(formData.phone || checkInRecord?.employee_id, checkInRecord)}
           className="w-full py-4 bg-white text-black rounded-2xl font-bold transition-all hover:scale-[1.01] active:scale-[0.99]"
@@ -675,7 +807,7 @@ const CheckInPage = () => {
           }
           setCheckInRecord(null);
         }}
-        className="mt-4 text-white/50 text-sm hover:text-white transition-colors py-2"
+        className="mt-2 text-white/50 text-sm hover:text-white transition-colors py-2"
       >
         不是我？重新输入
       </button>

@@ -25,10 +25,9 @@ import {
   getEvent,
   getPrizes,
   getParticipants,
-  createPrize,
   initDefaultRollingPrizes,
-  updatePrize as updatePrizeApi,
-  deletePrize as deletePrizeApi
+  syncEventPrizes,
+  undoRollingWinner,
 } from '../utils/supabaseCheckin';
 import { Participant, Prize, DrawRecord, BackgroundMusicSettings, DEFAULT_BACKGROUND_MUSIC, ThemeId, ThemePalette, AvatarThemeId } from '../types';
 import SettingsPanel from '../components/SettingsPanel';
@@ -83,6 +82,13 @@ const ProjectSettingsPage = () => {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   // 防抖 timer
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prizeSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (prizeSyncTimerRef.current) clearTimeout(prizeSyncTimerRef.current);
+    };
+  }, []);
 
   // 初始化
   useEffect(() => {
@@ -209,62 +215,46 @@ const ProjectSettingsPage = () => {
     saveParticipants(newParticipants);
   };
 
-  // 处理奖项变化 - 保存到本地和数据库
-  const handlePrizesChange = async (newPrizes: Prize[]) => {
-    if (!projectId) return;
-    
-    // 同步到数据库
-    try {
-      // 简单策略：更新所有奖项
-      for (const prize of newPrizes) {
-        const dbPrizes = await getPrizes(projectId);
-        const existingPrize = dbPrizes.find(p => p.id === prize.id);
-        
-        if (existingPrize) {
-          // 更新现有奖项
-          await updatePrizeApi(prize.id, {
-            name: prize.name,
-            description: prize.description || null,
-            image: prize.image || null,
-            quantity: prize.count,
-            remaining: prize.count - prize.drawn
-          });
-        } else {
-          // 创建新奖项
-          await createPrize(projectId, {
-            name: prize.name,
-            description: prize.description,
-            image: prize.image,
-            quantity: prize.count
-          });
-        }
-      }
-      
-      // 删除多余的奖项（数据库中有但本地没有的）
-      const dbPrizes = await getPrizes(projectId);
-      for (const dbPrize of dbPrizes) {
-        if (!newPrizes.find(p => p.id === dbPrize.id)) {
-          await deletePrizeApi(dbPrize.id);
-        }
-      }
+  const latestPrizesRef = useRef<Prize[]>(prizes);
 
-      // 同步完成后从数据库重新拉取带正确 UUID 的奖项
-      const updatedDbPrizes = await getPrizes(projectId);
-      const syncedPrizes: Prize[] = updatedDbPrizes.map(p => ({
-        id: p.id,
-        name: p.name,
-        count: p.quantity,
-        description: p.description || '',
-        drawn: p.quantity - p.remaining,
-        image: p.image || undefined,
-      }));
-      setPrizes(syncedPrizes);
-      savePrizes(syncedPrizes);
-    } catch (error) {
-      console.error('同步奖项到数据库失败:', error);
-      setPrizes(newPrizes);
-      savePrizes(newPrizes);
+  useEffect(() => {
+    latestPrizesRef.current = prizes;
+  }, [prizes]);
+
+  // 处理奖项变化 - 立即更新本地并防抖同步到数据库
+  const handlePrizesChange = (newPrizes: Prize[]) => {
+    setPrizes(newPrizes);
+    savePrizes(newPrizes);
+    latestPrizesRef.current = newPrizes;
+
+    if (!projectId) return;
+
+    if (prizeSyncTimerRef.current) {
+      clearTimeout(prizeSyncTimerRef.current);
     }
+
+    prizeSyncTimerRef.current = setTimeout(async () => {
+      try {
+        const payload = latestPrizesRef.current;
+        const syncedDbPrizes = await syncEventPrizes(projectId, payload);
+        if (syncedDbPrizes.length > 0) {
+          // 只针对本地临时生成 ID 的新建奖项更新其真实 UUID，绝不覆盖用户正在输入的文本
+          setPrizes(current =>
+            current.map((p, index) => {
+              if (p.id.startsWith('prize_')) {
+                const dbMatch = syncedDbPrizes[index] || syncedDbPrizes.find(dp => dp.sort_order === index);
+                if (dbMatch) {
+                  return { ...p, id: dbMatch.id };
+                }
+              }
+              return p;
+            })
+          );
+        }
+      } catch (error) {
+        console.error('防抖同步奖项到数据库失败:', error);
+      }
+    }, 800);
   };
 
   // 处理记录变化
@@ -274,10 +264,14 @@ const ProjectSettingsPage = () => {
   };
 
   // 撤销记录
-  const handleUndoRecord = (recordId: string) => {
+  const handleUndoRecord = async (recordId: string) => {
     const record = records.find(r => r.id === recordId);
     if (!record) return;
     
+    if (projectId) {
+      await undoRollingWinner(projectId, recordId);
+    }
+
     // 从已中奖集合中移除
     const newRecords = records.filter(r => r.id !== recordId);
     setRecords(newRecords);

@@ -31,17 +31,16 @@ describe('RealtimeFeed', () => {
     render(<RealtimeFeed records={records} />);
 
     expect(screen.getByRole('heading', { name: '张三' })).toBeInTheDocument();
-    expect(screen.getByText('最新签到')).toBeInTheDocument();
-    expect(screen.getByText('总经办')).toBeInTheDocument();
+    expect(screen.getByText('最新')).toBeInTheDocument();
     expect(screen.getByText('U001001')).toBeInTheDocument();
     expect(screen.getByText('李四')).toBeInTheDocument();
-    expect(screen.getByText('签到序列')).toBeInTheDocument();
+    expect(screen.getByText('U001002')).toBeInTheDocument();
   });
 
   it('shows a deliberate waiting state instead of an empty panel', () => {
     render(<RealtimeFeed records={[]} />);
 
-    expect(screen.getByRole('heading', { name: '等待首位嘉宾签到' })).toBeInTheDocument();
-    expect(screen.getByText(/二维码入口已就绪/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '等待嘉宾签到入场' })).toBeInTheDocument();
+    expect(screen.getByText(/请扫描右侧二维码完成签到/)).toBeInTheDocument();
   });
 });

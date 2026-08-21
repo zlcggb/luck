@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { BrowserRouter, Navigate, Routes, Route, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import LotteryApp from './App';
 import { CheckInDisplayPage, CheckInPage } from './pages';
@@ -10,6 +11,7 @@ import TurntableLotteryPage from './pages/TurntableLotteryPage';
 import ProfilePage from './pages/ProfilePage';
 import RequireAuth from './components/auth/RequireAuth';
 import { UiAppearanceProvider } from './contexts/UiAppearanceContext';
+import { checkIsEventAdmin } from './utils/supabaseCheckin';
 
 const ProtectedRoutes = () => <RequireAuth />;
 
@@ -33,14 +35,21 @@ const TurntableAdminWrapper = () => {
 
 /**
  * 抽奖页面包装器 - 提供导航功能
- * mode=admin 时显示设置按钮，普通用户访问不显示
+ * 自动识别当前登录用户是否是该项目的管理员，或者是带有 mode=admin
  */
 const LotteryPageWrapper = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const eventId = searchParams.get('event');
-  const isAdmin = searchParams.get('mode') === 'admin';
+  const [isAdmin, setIsAdmin] = useState<boolean>(searchParams.get('mode') === 'admin');
+
+  useEffect(() => {
+    if (!eventId) return;
+    checkIsEventAdmin(eventId).then(isOwnerOrAdmin => {
+      setIsAdmin(isOwnerOrAdmin || searchParams.get('mode') === 'admin');
+    });
+  }, [eventId, searchParams]);
 
   if (!eventId) {
     const createMode = location.pathname === '/lottery/rolling' ? '?create=rolling' : '';
@@ -99,16 +108,18 @@ const MainApp = () => {
         {/* 登录页面 */}
         <Route path="/login" element={<LoginPage />} />
         
+        {/* 抽奖大屏与签到大屏（公开可访问，自动识别管理员身份展示设置） */}
+        <Route path="/lottery" element={<LotteryPageWrapper />} />
+        <Route path="/lottery/rolling" element={<LotteryPageWrapper />} />
+        <Route path="/lottery/wheel" element={<TurntableLotteryPage />} />
+        <Route path="/display" element={<DisplayPageWrapper />} />
+
+        {/* 管理员后台页面：必须登录 */}
         <Route element={<ProtectedRoutes />}>
-          {/* 管理员页面：必须登录，并保留原始目标地址 */}
           <Route path="/projects" element={<ProjectListPage />} />
           <Route path="/project/:projectId" element={<ProjectSettingsPage />} />
           <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/lottery" element={<LotteryPageWrapper />} />
-          <Route path="/lottery/rolling" element={<LotteryPageWrapper />} />
-          <Route path="/lottery/wheel" element={<TurntableLotteryPage />} />
           <Route path="/lottery/wheel/admin" element={<TurntableAdminWrapper />} />
-          <Route path="/display" element={<DisplayPageWrapper />} />
         </Route>
 
         {/* 工号入口页面（引导页入口） */}

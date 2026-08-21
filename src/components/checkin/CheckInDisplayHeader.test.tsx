@@ -43,6 +43,17 @@ describe('CheckInDisplayHeader', () => {
     expect(screen.getByRole('button', { name: '切换到深色主题' })).toBeInTheDocument();
   });
 
+  it('triggers onOpenManagement when management button is clicked', async () => {
+    const onOpenManagement = vi.fn();
+    const user = userEvent.setup();
+    renderHeader({ ...baseProps, onOpenManagement });
+
+    const btn = screen.getByRole('button', { name: '签到与名单管理' });
+    expect(btn).toBeInTheDocument();
+    await user.click(btn);
+    expect(onOpenManagement).toHaveBeenCalledOnce();
+  });
+
   it('switches to a start action when the session is closed', async () => {
     const onStart = vi.fn();
     const user = userEvent.setup();

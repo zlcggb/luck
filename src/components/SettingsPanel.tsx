@@ -4,7 +4,7 @@ import {
   Upload, Download, FileSpreadsheet, Award, History,
   Trash2, Plus, Minus, RotateCcw, AlertCircle, QrCode, MapPin,
   Sparkles, ChevronRight, Monitor, Settings2, Loader2,
-  LogIn, Search, UserPlus, Eye, Palette
+  LogIn, Search, UserPlus, Eye, Palette, Check, Copy, Gift
 } from 'lucide-react';
 import { Participant, Prize, DrawRecord, BackgroundMusicSettings, ThemeId, ThemePalette, AvatarThemeId } from '../types';
 import { exportWinnersToExcel, downloadTemplate, parseExcelFile, processImportData } from '../utils/excel';
@@ -36,6 +36,7 @@ import {
   clearCheckInRecordsForEvent,
   supabase
 } from '../utils/supabaseCheckin';
+import { uploadPrizeImage } from '../utils/supabaseStorage';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -579,6 +580,27 @@ const SettingsPanel = ({
       return;
     }
     onPrizesChange(prizes.filter(p => p.id !== id));
+  };
+
+  const [uploadingPrizeId, setUploadingPrizeId] = useState<string | null>(null);
+
+  const handlePrizeImageUpload = async (prizeId: string, file: File) => {
+    if (!file) return;
+    setUploadingPrizeId(prizeId);
+    try {
+      const result = await uploadPrizeImage(file, selectedProjectId || currentEventId);
+      if (result.error) {
+        showError(result.error);
+        return;
+      }
+      if (result.url) {
+        updatePrize(prizeId, 'image', result.url);
+      }
+    } catch (err: any) {
+      showError(err?.message || '图片上传失败，请重试');
+    } finally {
+      setUploadingPrizeId(null);
+    }
   };
 
   // 签到数据
@@ -1341,10 +1363,16 @@ const SettingsPanel = ({
 
                       <div className="flex items-center gap-2 ml-8">
                          <div 
-                           className="relative w-10 h-10 rounded bg-black/40 overflow-hidden shrink-0 border border-white/10 group cursor-pointer"
-                           onClick={() => document.getElementById(`upload-${prize.id}`)?.click()}
+                           className="relative w-10 h-10 rounded bg-black/40 overflow-hidden shrink-0 border border-white/10 group cursor-pointer flex items-center justify-center"
+                           onClick={() => {
+                             if (uploadingPrizeId !== prize.id) {
+                               document.getElementById(`upload-${prize.id}`)?.click();
+                             }
+                           }}
                          >
-                           {prize.image ? (
+                           {uploadingPrizeId === prize.id ? (
+                             <Loader2 size={16} className="text-[#3c80fa] animate-spin" />
+                           ) : prize.image ? (
                              <>
                                <img src={prize.image} alt="" className="w-full h-full object-cover" />
                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1352,36 +1380,46 @@ const SettingsPanel = ({
                                </div>
                              </>
                            ) : (
-                             <div className="w-full h-full flex items-center justify-center text-gray-600 hover:text-white transition-colors">
+                             <div className="w-full h-full flex items-center justify-center text-gray-500 hover:text-white transition-colors">
                                <Plus size={14} />
                              </div>
                            )}
                          </div>
                          
                          <div className="flex flex-col justify-center">
-                            <button
-                              onClick={() => document.getElementById(`upload-${prize.id}`)?.click()}
-                              className="text-xs text-[#3c80fa] hover:text-[#573cfa] text-left font-medium transition-colors"
-                            >
-                              {prize.image ? '更换图片' : '上传图片'}
-                            </button>
-                            <span className="text-[10px] text-gray-600">支持 jpg, png, webp</span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                disabled={uploadingPrizeId === prize.id}
+                                onClick={() => document.getElementById(`upload-${prize.id}`)?.click()}
+                                className="text-xs text-[#3c80fa] hover:text-[#573cfa] text-left font-medium transition-colors disabled:opacity-50"
+                              >
+                                {uploadingPrizeId === prize.id ? '上传中...' : prize.image ? '更换图片' : '上传图片'}
+                              </button>
+                              {prize.image && uploadingPrizeId !== prize.id && (
+                                <button
+                                  type="button"
+                                  onClick={() => updatePrize(prize.id, 'image', '')}
+                                  className="text-xs text-red-400 hover:text-red-300 font-medium transition-colors"
+                                >
+                                  移除
+                                </button>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-gray-500">支持 jpg, png, webp, gif (超大图自动压缩)</span>
                          </div>
 
                          <input
                             id={`upload-${prize.id}`}
                             type="file"
-                            accept="image/*"
+                            accept="image/jpeg,image/png,image/webp,image/gif"
                             className="hidden"
                             onChange={(e) => {
                               const file = e.target.files?.[0];
                               if (file) {
-                                const reader = new FileReader();
-                                reader.onloadend = () => {
-                                  updatePrize(prize.id, 'image', reader.result as string);
-                                };
-                                reader.readAsDataURL(file);
+                                handlePrizeImageUpload(prize.id, file);
                               }
+                              e.target.value = '';
                             }}
                          />
                       </div>
@@ -1827,80 +1865,277 @@ const SettingsPanel = ({
             </div>
           )}
 
-          {/* 数据导出 */}
-          {activeTab === 'export' && (
-            <div className="space-y-4">
-              <div className="p-4 bg-white/5 rounded-xl border border-white/10">
-                <div className="flex items-center gap-2 mb-3">
-                  <Award size={20} className="text-[#b63cfa]" />
-                  <span className="font-medium text-white">抽奖统计</span>
-                </div>
-                <div className="grid grid-cols-4 gap-4">
-                  <div>
-                    <p className="text-2xl font-bold text-white">{participants.length}</p>
-                    <p className="text-xs text-gray-500">总人数</p>
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold text-[#b63cfa]">
-                      {records.reduce((sum, r) => sum + r.winners.length, 0)}
-                    </p>
-                    <p className="text-xs text-gray-500">已中奖</p>
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold text-[#3c80fa]">
-                      {participants.length > 0 
-                        ? ((records.reduce((sum, r) => sum + r.winners.length, 0) / participants.length) * 100).toFixed(1)
-                        : 0}%
-                    </p>
-                    <p className="text-xs text-gray-500">中奖率</p>
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold text-white">{records.length}</p>
-                    <p className="text-xs text-gray-500">抽奖轮次</p>
-                  </div>
-                </div>
-              </div>
+          {/* 数据导出与抽奖统计 */}
+          {activeTab === 'export' && (() => {
+            const totalWinnersCount = records.reduce((sum, r) => sum + r.winners.length, 0);
+            const winRate = participants.length > 0 
+              ? ((totalWinnersCount / participants.length) * 100).toFixed(1)
+              : '0.0';
 
-              <button
-                onClick={() => {
-                  const success = exportWinnersToExcel(records);
-                  if (!success) {
-                    showWarning('暂无中奖记录可导出');
-                  }
-                }}
-                disabled={records.length === 0}
-                className="w-full py-3 px-4 bg-gradient-to-r from-[#3c80fa] to-[#573cfa] text-white font-medium rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Download size={18} />
-                导出中奖名单 (Excel)
-              </button>
+            // 复制名单为纯文本
+            const copyWinnersText = () => {
+              if (records.length === 0) {
+                showWarning('暂无中奖记录可复制');
+                return;
+              }
+              let text = `🎉 【${projects.find(p => p.id === selectedProjectId)?.name || '幸运抽奖'} · 中奖名单】\n`;
+              text += `📅 统计时间：${new Date().toLocaleString('zh-CN')}\n`;
+              text += `👥 总参会：${participants.length} 人 | 已中奖：${totalWinnersCount} 人 (${winRate}%)\n\n`;
 
-              <div className="border-t border-white/10 pt-4 mt-6">
-                <h3 className="text-sm font-medium text-gray-400 mb-3">危险操作</h3>
-                <button
-                  onClick={async () => {
-                    const confirmed = await showConfirm('确定要清除所有数据吗？此操作不可恢复！');
-                    if (confirmed) {
-                      try {
-                        if (selectedProjectId) {
-                          const { clearCheckInRecordsForEvent } = await import('../utils/supabaseCheckin');
-                          await clearCheckInRecordsForEvent(selectedProjectId);
-                          setCheckInStats(prev => ({ ...prev, checkedInCount: 0, checkInPercentage: 0 }));
+              prizes.forEach(prize => {
+                const prizeRecords = records.filter(r => r.prizeId === prize.id || r.prizeName === prize.name);
+                const prizeWinners = prizeRecords.flatMap(r => r.winners);
+                if (prizeWinners.length > 0) {
+                  text += `🏆 ${prize.name}（${prizeWinners.length}/${prize.count}人）：\n`;
+                  prizeWinners.forEach((w, idx) => {
+                    text += `  ${idx + 1}. ${w.name} (${w.id}${w.dept ? ` - ${w.dept}` : ''})\n`;
+                  });
+                  text += `\n`;
+                }
+              });
+
+              const knownPrizeIds = new Set(prizes.map(p => p.id));
+              const knownPrizeNames = new Set(prizes.map(p => p.name));
+              const otherRecords = records.filter(r => !knownPrizeIds.has(r.prizeId) && !knownPrizeNames.has(r.prizeName));
+              if (otherRecords.length > 0) {
+                text += `🏆 其他奖项：\n`;
+                otherRecords.forEach(r => {
+                  text += `  【${r.prizeName}】：\n`;
+                  r.winners.forEach((w, idx) => {
+                    text += `    ${idx + 1}. ${w.name} (${w.id}${w.dept ? ` - ${w.dept}` : ''})\n`;
+                  });
+                });
+                text += `\n`;
+              }
+
+              navigator.clipboard.writeText(text).then(() => {
+                showSuccess('中奖名单已复制到剪贴板！');
+              }).catch(() => {
+                showError('复制失败，请尝试直接导出 Excel');
+              });
+            };
+
+            return (
+              <div className="space-y-5 animate-fadeIn">
+                {/* 顶部总览统计看板 */}
+                <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-transparent p-5 shadow-lg backdrop-blur-md">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2.5">
+                      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-purple-500/20 text-purple-400">
+                        <Award size={20} />
+                      </span>
+                      <div>
+                        <h3 className="font-bold text-white text-base">抽奖统计总览</h3>
+                        <p className="text-[11px] text-gray-400">中奖数据实时同步与汇总</p>
+                      </div>
+                    </div>
+                    <span className="rounded-full bg-blue-500/10 px-3 py-1 text-xs font-semibold text-blue-400 border border-blue-500/20">
+                      已抽 {records.length} 轮次
+                    </span>
+                  </div>
+
+                  {/* 核心指标 */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+                    <div className="rounded-xl border border-white/5 bg-black/20 p-3">
+                      <p className="text-xs text-gray-400">参会总人数</p>
+                      <p className="mt-1 text-2xl font-extrabold text-white tabular-nums">{participants.length}</p>
+                    </div>
+                    <div className="rounded-xl border border-purple-500/20 bg-purple-500/10 p-3">
+                      <p className="text-xs text-purple-300">累计已中奖</p>
+                      <p className="mt-1 text-2xl font-extrabold text-purple-400 tabular-nums">{totalWinnersCount}</p>
+                    </div>
+                    <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 p-3">
+                      <p className="text-xs text-blue-300">整体中奖率</p>
+                      <p className="mt-1 text-2xl font-extrabold text-blue-400 tabular-nums">{winRate}%</p>
+                    </div>
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
+                      <p className="text-xs text-emerald-300">奖项覆盖</p>
+                      <p className="mt-1 text-2xl font-extrabold text-emerald-400 tabular-nums">
+                        {prizes.filter(p => records.some(r => r.prizeId === p.id || r.prizeName === p.name)).length} / {prizes.length}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* 快捷操作栏 */}
+                  <div className="flex flex-wrap gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const success = exportWinnersToExcel(records);
+                        if (!success) {
+                          showWarning('暂无中奖记录可导出');
+                        } else {
+                          showSuccess('Excel 中奖名单已成功导出！');
                         }
-                      } catch (e) {
-                         console.error('Failed to clear cloud check-ins', e);
+                      }}
+                      disabled={records.length === 0}
+                      className="flex-1 min-w-[160px] py-2.5 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-semibold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed active:scale-98"
+                    >
+                      <Download size={15} />
+                      导出中奖名单 (Excel)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={copyWinnersText}
+                      disabled={records.length === 0}
+                      className="py-2.5 px-4 bg-white/10 hover:bg-white/15 text-white text-xs font-semibold rounded-xl border border-white/10 transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                      title="复制纯文本中奖名单"
+                    >
+                      <Copy size={15} />
+                      复制名单文本
+                    </button>
+                  </div>
+                </div>
+
+                {/* 奖项对应中奖人员列表展台 */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="flex items-center gap-2">
+                      <Gift size={18} className="text-purple-400" />
+                      <h4 className="font-bold text-white text-sm">奖项中奖明细</h4>
+                    </div>
+                    <span className="text-xs text-gray-400">共 {prizes.length} 个奖项</span>
+                  </div>
+
+                  {prizes.map((prize, pIdx) => {
+                    const prizeRecords = records.filter(r => r.prizeId === prize.id || r.prizeName === prize.name);
+                    const winners = prizeRecords.flatMap(r => 
+                      r.winners.map(w => ({
+                        ...w,
+                        timestamp: r.timestamp,
+                        recordId: r.id,
+                      }))
+                    );
+                    const wonCount = winners.length;
+                    const isFull = wonCount >= prize.count;
+                    const isPartial = wonCount > 0 && !isFull;
+
+                    return (
+                      <div 
+                        key={prize.id || pIdx}
+                        className="rounded-2xl border border-white/10 bg-white/5 p-4 transition-all hover:border-white/20"
+                      >
+                        {/* 奖项标题栏 */}
+                        <div className="flex items-center justify-between gap-3 pb-3 border-b border-white/10">
+                          <div className="flex items-center gap-3 min-w-0">
+                            {prize.image ? (
+                              <img 
+                                src={prize.image} 
+                                alt={prize.name} 
+                                className="h-10 w-10 rounded-xl object-cover border border-white/15 shadow-sm shrink-0" 
+                              />
+                            ) : (
+                              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500/20 to-purple-500/20 text-amber-400 border border-amber-500/30 shrink-0">
+                                <Award size={20} />
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h5 className="font-bold text-white text-sm truncate">{prize.name}</h5>
+                                {prize.description && (
+                                  <span className="text-xs text-gray-400 truncate">({prize.description})</span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-gray-500 mt-0.5">名额：{prize.count} 人</p>
+                            </div>
+                          </div>
+
+                          <div className="shrink-0">
+                            {isFull ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-400 border border-emerald-500/20">
+                                <Check size={12} />
+                                已抽满 ({wonCount}/{prize.count})
+                              </span>
+                            ) : isPartial ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2.5 py-1 text-xs font-semibold text-blue-400 border border-blue-500/20">
+                                抽取中 ({wonCount}/{prize.count})
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2.5 py-1 text-xs font-medium text-gray-400 border border-white/10">
+                                待抽取 (0/{prize.count})
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 中奖人员网格 */}
+                        {winners.length > 0 ? (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 pt-3">
+                            {winners.map((winner, wIdx) => (
+                              <div 
+                                key={`${winner.id}-${winner.timestamp}-${wIdx}`}
+                                className="group relative flex items-center gap-3 rounded-xl border border-white/5 bg-black/30 p-2.5 transition-all hover:bg-black/50 hover:border-purple-500/40"
+                              >
+                                <img 
+                                  src={getAvatarUrlForParticipant(winner, avatarThemeId)}
+                                  data-fallback={getAvatarFallbackUrlForParticipant(winner, avatarThemeId)}
+                                  onError={handleAvatarImageError}
+                                  alt={winner.name} 
+                                  className="h-10 w-10 rounded-full object-cover border border-purple-500/40 shadow-sm shrink-0"
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center justify-between">
+                                    <p className="font-bold text-white text-xs truncate group-hover:text-purple-300 transition-colors">
+                                      {winner.name}
+                                    </p>
+                                    <span className="text-[10px] font-mono text-gray-500">
+                                      {new Date(winner.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-gray-400">
+                                    <span className="font-mono bg-white/10 px-1 py-0.2 rounded text-[9px]">{winner.id}</span>
+                                    {winner.dept && <span className="truncate">{winner.dept}</span>}
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => onUndoRecord(winner.recordId)}
+                                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded transition-all"
+                                  title="撤销该中奖记录"
+                                >
+                                  <RotateCcw size={12} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="pt-3 text-center py-4 text-xs text-gray-500 bg-black/10 rounded-xl mt-3 border border-dashed border-white/5">
+                            暂未抽取中奖人（共有 {prize.count} 个名额待开奖）
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* 危险操作 */}
+                <div className="border-t border-white/10 pt-4 mt-6">
+                  <h3 className="text-sm font-medium text-gray-400 mb-3">危险操作</h3>
+                  <button
+                    onClick={async () => {
+                      const confirmed = await showConfirm('确定要清除所有数据吗？此操作不可恢复！');
+                      if (confirmed) {
+                        try {
+                          if (selectedProjectId) {
+                            const { clearCheckInRecordsForEvent } = await import('../utils/supabaseCheckin');
+                            await clearCheckInRecordsForEvent(selectedProjectId);
+                            setCheckInStats(prev => ({ ...prev, checkedInCount: 0, checkInPercentage: 0 }));
+                          }
+                        } catch (e) {
+                           console.error('Failed to clear cloud check-ins', e);
+                        }
+                        onClearAll();
                       }
-                      onClearAll();
-                    }
-                  }}
-                  className="w-full py-3 px-4 bg-red-500/10 text-red-400 font-medium rounded-xl hover:bg-red-500/20 transition-colors flex items-center justify-center gap-2 border border-red-500/30"
-                >
-                  <Trash2 size={18} />
-                  清除所有数据
-                </button>
+                    }}
+                    className="w-full py-3 px-4 bg-red-500/10 text-red-400 font-medium rounded-xl hover:bg-red-500/20 transition-colors flex items-center justify-center gap-2 border border-red-500/30"
+                  >
+                    <Trash2 size={18} />
+                    清除所有数据
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </div>
 

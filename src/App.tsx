@@ -50,7 +50,9 @@ import {
   getPrizes as getDbPrizes,
   getWinners,
   initDefaultRollingPrizes,
+  syncEventPrizes,
   subscribeToParticipants,
+  undoRollingWinner,
 } from './utils/supabaseCheckin';
 import { buildRollingPool, mergeCheckedInParticipant } from './utils/rollingPool';
 import {
@@ -98,8 +100,15 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
   const avatarPreloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const avatarPreloadChunkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const avatarBackgroundPreloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prizeSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const preloadedAvatarUrlsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    return () => {
+      if (prizeSyncTimerRef.current) clearTimeout(prizeSyncTimerRef.current);
+    };
+  }, []);
 
   // 使用内部弹窗
   const { showWarning, showConfirm } = useModal();
@@ -227,6 +236,50 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
     if (!isInitialized || eventId) return;
     savePrizes(prizes);
   }, [prizes, isInitialized, eventId]);
+
+  const latestPrizesRef = useRef<Prize[]>(prizes);
+
+  useEffect(() => {
+    latestPrizesRef.current = prizes;
+  }, [prizes]);
+
+  // 处理奖项变更并防抖同步至数据库
+  const handlePrizesChange = (newPrizes: Prize[]) => {
+    setPrizes(newPrizes);
+    latestPrizesRef.current = newPrizes;
+
+    if (!eventId) {
+      savePrizes(newPrizes);
+      return;
+    }
+
+    if (prizeSyncTimerRef.current) {
+      clearTimeout(prizeSyncTimerRef.current);
+    }
+
+    prizeSyncTimerRef.current = setTimeout(async () => {
+      try {
+        const payload = latestPrizesRef.current;
+        const syncedDbPrizes = await syncEventPrizes(eventId, payload);
+        if (syncedDbPrizes.length > 0) {
+          // 只针对本地临时生成 ID 的新建奖项更新其真实 UUID，绝不覆盖用户正在输入的文本
+          setPrizes(current =>
+            current.map((p, index) => {
+              if (p.id.startsWith('prize_')) {
+                const dbMatch = syncedDbPrizes[index] || syncedDbPrizes.find(dp => dp.sort_order === index);
+                if (dbMatch) {
+                  return { ...p, id: dbMatch.id };
+                }
+              }
+              return p;
+            })
+          );
+        }
+      } catch (error) {
+        console.error('抽奖大屏防抖同步奖项失败:', error);
+      }
+    }, 800);
+  };
 
   useEffect(() => {
     if (!isInitialized || eventId) return;
@@ -576,9 +629,14 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
       return;
     }
     
+    // 如果存在后端活动，调用数据库原子撤销中奖记录并恢复库存
+    if (eventId) {
+      await undoRollingWinner(eventId, recordId);
+    }
+
     // 从已中奖集合中移除
     const newExcludedIds = new Set(excludedIds);
-    record.winners.forEach(w => newExcludedIds.delete(w.id));
+    record.winners.forEach(w => newExcludedIds.delete(w.id.trim().toUpperCase()));
     setExcludedIds(newExcludedIds);
     
     // 更新奖项已抽取数量
@@ -703,20 +761,21 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
               )}
             </div>
 
-             {/* 设置按钮 - 仅管理员可见 */}
-             {isAdmin && (
-               <>
-               <div className="h-8 w-[1px] bg-white/10 hidden md:block"></div>
-              
-               <button 
-                 onClick={() => setSettingsOpen(true)} 
-                 className="p-2 md:p-3 bg-white/5 hover:bg-white/10 rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-text-strong)] border border-white/5 transition-all hover:rotate-90 hover:shadow-[0_0_15px_rgba(255,255,255,0.1)] shrink-0"
-                 title="设置"
-               >
-                 <Settings size={18} className="md:w-5 md:h-5" />
-               </button>
-               </>
-             )}
+              {/* 设置按钮 - 仅管理员可见（常驻显眼展示） */}
+              {isAdmin && (
+                <>
+                <div className="h-8 w-[1px] bg-white/10 hidden md:block"></div>
+               
+                <button 
+                  onClick={() => setSettingsOpen(true)} 
+                  className="flex items-center gap-1.5 px-3 py-2 md:px-3.5 md:py-2.5 bg-gradient-to-r from-blue-500/20 to-purple-500/20 hover:from-blue-500/30 hover:to-purple-500/30 rounded-xl text-white border border-blue-400/30 shadow-[0_0_20px_rgba(59,130,246,0.25)] transition-all hover:scale-105 active:scale-95 shrink-0 group"
+                  title="项目与抽奖设置"
+                >
+                  <Settings size={18} className="text-blue-400 group-hover:rotate-90 transition-transform duration-300 md:w-5 md:h-5" />
+                  <span className="text-xs md:text-sm font-semibold tracking-wide text-white">设置</span>
+                </button>
+                </>
+              )}
           </div>
         </header>
 
@@ -1418,12 +1477,13 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
         participants={participants}
         onParticipantsChange={setParticipants}
         prizes={prizes}
-        onPrizesChange={setPrizes}
+        onPrizesChange={handlePrizesChange}
         records={records}
         onRecordsChange={setRecords}
         onUndoRecord={handleUndoRecord}
         onClearAll={handleClearAll}
         onOpenCheckInDisplay={onOpenCheckInDisplay}
+        currentEventId={eventId || undefined}
         themeId={themeId}
         onThemeChange={setThemeId}
         customThemePalette={customThemePalette}
