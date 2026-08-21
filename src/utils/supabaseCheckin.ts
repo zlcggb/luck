@@ -337,6 +337,132 @@ export const subscribeToParticipants = (
 };
 
 // ============================================
+// 抽奖多端实时同频广播与事件订阅
+// ============================================
+
+export type LotteryBroadcastAction =
+  | { type: 'DRAW_START'; prizeId: string; batchSize: number }
+  | { type: 'DRAW_STOP'; prizeId: string; winners: { id: string; name: string; dept?: string; avatar?: string }[]; remainingSlots?: number }
+  | { type: 'PRIZE_CHANGE'; prizeId: string }
+  | { type: 'RESET_DISPLAY' };
+
+export interface LotterySyncCallbacks {
+  onBroadcast?: (action: LotteryBroadcastAction) => void;
+  onWinnerInsert?: (winner: LuckWinner) => void;
+  onWinnerDelete?: (winner: Partial<LuckWinner> & { id: string }) => void;
+  onPrizeUpdate?: (prize: LuckPrize) => void;
+}
+
+let lotterySyncChannel: ReturnType<typeof supabase.channel> | null = null;
+let currentLotterySyncEventId: string | null = null;
+
+export const getLotterySyncChannel = (eventId: string) => {
+  if (lotterySyncChannel && currentLotterySyncEventId === eventId) {
+    return lotterySyncChannel;
+  }
+  if (lotterySyncChannel) {
+    void supabase.removeChannel(lotterySyncChannel);
+  }
+  currentLotterySyncEventId = eventId;
+  lotterySyncChannel = supabase.channel(`lottery_sync_${eventId}`, {
+    config: {
+      broadcast: { self: false },
+    },
+  });
+  lotterySyncChannel.subscribe();
+  return lotterySyncChannel;
+};
+
+/**
+ * 发送抽奖状态广播（供管理端/大屏调用）
+ */
+export const broadcastLotteryEvent = async (
+  eventId: string,
+  action: LotteryBroadcastAction
+) => {
+  if (!eventId) return;
+  try {
+    const channel = getLotterySyncChannel(eventId);
+    await channel.send({
+      type: 'broadcast',
+      event: 'lottery_action',
+      payload: action,
+    });
+  } catch (err) {
+    console.error('发送抽奖同步广播失败:', err);
+  }
+};
+
+/**
+ * 订阅抽奖实时同频与数据库事件（供所有页面调用）
+ */
+export const subscribeToLotterySync = (
+  eventId: string,
+  callbacks: LotterySyncCallbacks
+) => {
+  if (!eventId) return () => {};
+
+  const channel = supabase
+    .channel(`lottery_sync_sub_${eventId}_${Math.random().toString(36).slice(2, 9)}`)
+    .on(
+      'broadcast',
+      { event: 'lottery_action' },
+      (payload) => {
+        if (payload?.payload && callbacks.onBroadcast) {
+          callbacks.onBroadcast(payload.payload as LotteryBroadcastAction);
+        }
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'luck_winners',
+        filter: `event_id=eq.${eventId}`,
+      },
+      (payload) => {
+        if (callbacks.onWinnerInsert) {
+          callbacks.onWinnerInsert(payload.new as LuckWinner);
+        }
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'luck_winners',
+        filter: `event_id=eq.${eventId}`,
+      },
+      (payload) => {
+        if (callbacks.onWinnerDelete) {
+          callbacks.onWinnerDelete(payload.old as Partial<LuckWinner> & { id: string });
+        }
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'luck_prizes',
+        filter: `event_id=eq.${eventId}`,
+      },
+      (payload) => {
+        if (callbacks.onPrizeUpdate) {
+          callbacks.onPrizeUpdate(payload.new as LuckPrize);
+        }
+      }
+    )
+    .subscribe();
+
+  return () => {
+    void supabase.removeChannel(channel);
+  };
+};
+
+// ============================================
 // 参与者查询
 // ============================================
 

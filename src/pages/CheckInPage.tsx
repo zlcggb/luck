@@ -110,10 +110,22 @@ const CheckInPage = () => {
 
   const goToLotteryScreen = () => {
     clearRedirectTimer();
+    const curEmpId = (checkInRecord?.employee_id || normalizeEmployeeId(employeeId, employeeIdPrefix) || '').trim();
+    const curEmpName = (checkInRecord?.name || rollingName || formData.name || '').trim();
+
     if (event?.id) {
-      navigate(`/lottery?event=${encodeURIComponent(event.id)}`);
+      if (curEmpId) {
+        try {
+          sessionStorage.setItem(`luck_user_${event.id}`, JSON.stringify({ employeeId: curEmpId, name: curEmpName }));
+        } catch {
+          // ignore storage error
+        }
+      }
+      const empParam = curEmpId ? `&employee_id=${encodeURIComponent(curEmpId)}` : '';
+      navigate(`/lottery?event=${encodeURIComponent(event.id)}${empParam}`);
     } else {
-      navigate('/lottery');
+      const empParam = curEmpId ? `?employee_id=${encodeURIComponent(curEmpId)}` : '';
+      navigate(`/lottery${empParam}`);
     }
   };
 

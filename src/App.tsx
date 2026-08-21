@@ -53,6 +53,8 @@ import {
   syncEventPrizes,
   subscribeToParticipants,
   undoRollingWinner,
+  broadcastLotteryEvent,
+  subscribeToLotterySync,
 } from './utils/supabaseCheckin';
 import { buildRollingPool, mergeCheckedInParticipant } from './utils/rollingPool';
 import {
@@ -96,6 +98,11 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
   const [currentPrizeId, setCurrentPrizeId] = useState<string>('');
   const [batchSize, setBatchSize] = useState(1);
 
+  // 用户身份与中奖弹窗（用户端使用）
+  const [currentEmployeeId, setCurrentEmployeeId] = useState<string>('');
+  const [currentUserInfo, setCurrentUserInfo] = useState<{ name?: string; dept?: string } | null>(null);
+  const [currentUserWonPrize, setCurrentUserWonPrize] = useState<{ prizeName: string } | null>(null);
+
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const avatarPreloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const avatarPreloadChunkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -103,6 +110,22 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
   const prizeSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const preloadedAvatarUrlsRef = useRef<Set<string>>(new Set());
+
+  const participantsRef = useRef<Participant[]>(participants);
+  const excludedIdsRef = useRef<Set<string>>(excludedIds);
+  const prizesRef = useRef<Prize[]>(prizes);
+
+  useEffect(() => {
+    participantsRef.current = participants;
+  }, [participants]);
+
+  useEffect(() => {
+    excludedIdsRef.current = excludedIds;
+  }, [excludedIds]);
+
+  useEffect(() => {
+    prizesRef.current = prizes;
+  }, [prizes]);
 
   useEffect(() => {
     return () => {
@@ -121,6 +144,51 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
   const [avatarThemeId, setAvatarThemeId] = useState<AvatarThemeId>(DEFAULT_AVATAR_THEME_ID);
   const [searchParams] = useSearchParams();
   const eventId = searchParams.get('event');
+
+  // 读取并解析当前访问用户的工号信息
+  useEffect(() => {
+    const empFromUrl = searchParams.get('employee_id');
+    let empId = empFromUrl ? empFromUrl.trim().toUpperCase() : '';
+    let cachedName = '';
+
+    if (eventId) {
+      try {
+        const stored = sessionStorage.getItem(`luck_user_${eventId}`);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (!empId && parsed.employeeId) {
+            empId = String(parsed.employeeId).trim().toUpperCase();
+          }
+          if (parsed.name) {
+            cachedName = String(parsed.name).trim();
+          }
+        }
+      } catch {
+        // ignore storage error
+      }
+    }
+
+    if (empId) {
+      setCurrentEmployeeId(empId);
+      if (cachedName) {
+        setCurrentUserInfo(prev => ({ ...prev, name: cachedName }));
+      }
+    }
+  }, [searchParams, eventId]);
+
+  // 根据工号从已加载参与者中补充匹配详细信息（姓名/部门）
+  useEffect(() => {
+    if (!currentEmployeeId || participants.length === 0) return;
+    const matched = participants.find(
+      p => p.id.trim().toUpperCase() === currentEmployeeId.toUpperCase()
+    );
+    if (matched) {
+      setCurrentUserInfo({
+        name: matched.name,
+        dept: matched.dept,
+      });
+    }
+  }, [currentEmployeeId, participants]);
   
   useEffect(() => {
     const init = async () => {
@@ -447,6 +515,9 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
       if (alsoResetWinnersView) {
         setShowAllWinners(false);
       }
+      if (eventId) {
+        void broadcastLotteryEvent(eventId, { type: 'RESET_DISPLAY' });
+      }
     }
   };
 
@@ -474,7 +545,6 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
         
         // 自动选择一个合适的默认抽取人数（优先选择较大的因数，但不超过当前选择）
         if (!newFactors.includes(batchSize)) {
-          // 找到小于等于当前选择的最大因数，或者最大因数
           const suitable = newFactors.filter(f => f <= batchSize);
           setBatchSize(suitable.length > 0 ? Math.max(...suitable) : Math.max(...newFactors));
         }
@@ -488,6 +558,13 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
       }
       
       resetDisplay(false); // 不重置汇总页状态，因为上面已经处理了
+
+      if (eventId) {
+        void broadcastLotteryEvent(eventId, {
+          type: 'PRIZE_CHANGE',
+          prizeId,
+        });
+      }
     }
   };
 
@@ -519,6 +596,137 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
     }
     return result;
   };
+
+  // 订阅抽奖全流程同频广播与中奖数据同步（用户端与管理端多端实时联动）
+  useEffect(() => {
+    if (!eventId) return;
+
+    return subscribeToLotterySync(eventId, {
+      onBroadcast: (action) => {
+        if (action.type === 'DRAW_START') {
+          if (action.prizeId) {
+            setCurrentPrizeId(action.prizeId);
+          }
+          if (action.batchSize) {
+            setBatchSize(action.batchSize);
+          }
+          setShowConfetti(false);
+          setHasDrawn(false);
+          setShowAllWinners(false);
+          setIsRolling(true);
+
+          if (timerRef.current) clearInterval(timerRef.current);
+          timerRef.current = setInterval(() => {
+            const currentPool = participantsRef.current;
+            const currentExcluded = excludedIdsRef.current;
+            const available = currentPool.filter(p => !currentExcluded.has(p.id));
+            const poolToUse = available.length > 0 ? available : currentPool;
+            const batch = getRandomBatch(poolToUse, action.batchSize || 1);
+            setCurrentDisplay(batch);
+          }, 80);
+        } else if (action.type === 'DRAW_STOP') {
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
+          setIsRolling(false);
+          setShowConfetti(true);
+          setHasDrawn(true);
+
+          const normalizedWinners: Participant[] = action.winners.map(w => ({
+            id: w.id,
+            name: w.name,
+            dept: w.dept || '',
+            avatar: w.avatar,
+          }));
+          setCurrentDisplay(normalizedWinners);
+
+          const curPrize = prizesRef.current.find(p => p.id === action.prizeId);
+          const prizeName = curPrize?.name || '中奖奖项';
+
+          const newRecord: DrawRecord = {
+            id: `record_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            timestamp: Date.now(),
+            prizeId: action.prizeId,
+            prizeName,
+            winners: normalizedWinners,
+          };
+          setRecords(prev => [newRecord, ...prev]);
+
+          setExcludedIds(prev => {
+            const next = new Set(prev);
+            action.winners.forEach(w => next.add(w.id.trim().toUpperCase()));
+            return next;
+          });
+
+          setPrizes(prev => prev.map(p =>
+            p.id === action.prizeId
+              ? { ...p, drawn: p.drawn + action.winners.length }
+              : p
+          ));
+
+          // 检查当前用户是否中奖
+          if (currentEmployeeId) {
+            const isMe = action.winners.some(
+              w => w.id.trim().toUpperCase() === currentEmployeeId.toUpperCase()
+            );
+            if (isMe) {
+              setCurrentUserWonPrize({ prizeName });
+            }
+          }
+        } else if (action.type === 'PRIZE_CHANGE') {
+          if (action.prizeId) {
+            setCurrentPrizeId(action.prizeId);
+            resetDisplay(false);
+          }
+        } else if (action.type === 'RESET_DISPLAY') {
+          resetDisplay(false);
+        }
+      },
+      onWinnerInsert: (newWinner) => {
+        const winnerId = newWinner.employee_id.trim().toUpperCase();
+        setExcludedIds(prev => {
+          if (prev.has(winnerId)) return prev;
+          const next = new Set(prev);
+          next.add(winnerId);
+          return next;
+        });
+
+        // 检查个人是否中奖
+        if (currentEmployeeId && winnerId === currentEmployeeId.toUpperCase()) {
+          const prizeName = newWinner.prize?.name || prizesRef.current.find(p => p.id === newWinner.prize_id)?.name || '大奖';
+          setCurrentUserWonPrize({ prizeName });
+        }
+      },
+      onWinnerDelete: (oldWinner) => {
+        if (oldWinner.id) {
+          setRecords(prev => prev.filter(r => r.id !== oldWinner.id));
+        }
+        if (oldWinner.employee_id) {
+          const empId = oldWinner.employee_id.trim().toUpperCase();
+          setExcludedIds(prev => {
+            const next = new Set(prev);
+            next.delete(empId);
+            return next;
+          });
+        }
+      },
+      onPrizeUpdate: (updatedPrize) => {
+        setPrizes(prev => prev.map(p => {
+          if (p.id === updatedPrize.id) {
+            return {
+              ...p,
+              name: updatedPrize.name,
+              count: updatedPrize.quantity,
+              drawn: updatedPrize.quantity - updatedPrize.remaining,
+              description: updatedPrize.description || '',
+            };
+          }
+          return p;
+        }));
+      },
+    });
+  }, [eventId, currentEmployeeId]);
 
   // --- 核心逻辑：开始/停止抽奖 ---
   const toggleLottery = () => {
@@ -559,6 +767,15 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
 
     setIsRolling(true);
     setShowConfetti(false);
+    setHasDrawn(false);
+
+    if (eventId) {
+      void broadcastLotteryEvent(eventId, {
+        type: 'DRAW_START',
+        prizeId: currentPrize.id,
+        batchSize,
+      });
+    }
 
     timerRef.current = setInterval(() => {
       const batch = getRandomBatch(availableParticipants, batchSize);
@@ -617,6 +834,25 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
         ? { ...p, drawn: p.drawn + finalWinners.length }
         : p
     ));
+
+    // 广播开奖结果给其他端
+    if (eventId) {
+      void broadcastLotteryEvent(eventId, {
+        type: 'DRAW_STOP',
+        prizeId: currentPrize.id,
+        winners: finalWinners,
+      });
+    }
+
+    // 检查当前用户是否中奖
+    if (currentEmployeeId) {
+      const isMe = finalWinners.some(
+        w => w.id.trim().toUpperCase() === currentEmployeeId.toUpperCase()
+      );
+      if (isMe) {
+        setCurrentUserWonPrize({ prizeName: currentPrize.name });
+      }
+    }
   };
 
   // 撤销某轮抽奖
@@ -735,47 +971,64 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
           </div>
 
           {/* 右侧控制区 */}
-          <div className="flex items-center gap-2 md:gap-6">
-            {/* 抽取人数选择 */}
-            <div className="flex items-center bg-[color:rgb(var(--color-bg-base-rgb)/0.5)] backdrop-blur-md rounded-xl p-1 border border-white/10 shadow-inner scale-90 md:scale-100 origin-right">
-              {availableBatchSizes.length === 0 ? (
-                <span className="text-[var(--color-text-muted)] text-xs px-3 py-1">--</span>
-              ) : (
-                availableBatchSizes.map(num => (
-                  <button
-                    key={num}
-                    onClick={() => handleBatchSizeChange(num)}
-                    disabled={isRolling}
-                    className={`
-                      w-8 h-8 md:w-10 md:h-10 rounded-lg text-sm md:text-base font-bold transition-all flex items-center justify-center
-                      ${batchSize === num 
-                        ? 'bg-[var(--color-primary)] text-white shadow-lg scale-105' 
-                        : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-strong)] hover:bg-white/10'
-                      }
-                      ${isRolling ? 'opacity-50 cursor-not-allowed' : ''}
-                    `}
-                  >
-                    {num}
-                  </button>
-                ))
-              )}
-            </div>
+          <div className="flex items-center gap-2 md:gap-4">
+            {/* 用户工号展示（当存在 employee_id 时） */}
+            {currentEmployeeId && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 md:px-3.5 md:py-1.5 rounded-full bg-blue-500/15 border border-blue-400/30 text-blue-200 text-xs md:text-sm backdrop-blur-md shrink-0 shadow-[0_0_15px_rgba(59,130,246,0.15)]">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="font-mono font-semibold tracking-wide">工号: {currentEmployeeId}</span>
+                {currentUserInfo?.name && (
+                  <span className="text-white/90 font-medium">({currentUserInfo.name})</span>
+                )}
+              </div>
+            )}
 
-              {/* 设置按钮 - 仅管理员可见（常驻显眼展示） */}
-              {isAdmin && (
-                <>
-                <div className="h-8 w-[1px] bg-white/10 hidden md:block"></div>
-               
-                <button 
-                  onClick={() => setSettingsOpen(true)} 
-                  className="flex items-center gap-1.5 px-3 py-2 md:px-3.5 md:py-2.5 bg-gradient-to-r from-blue-500/20 to-purple-500/20 hover:from-blue-500/30 hover:to-purple-500/30 rounded-xl text-white border border-blue-400/30 shadow-[0_0_20px_rgba(59,130,246,0.25)] transition-all hover:scale-105 active:scale-95 shrink-0 group"
-                  title="项目与抽奖设置"
-                >
-                  <Settings size={18} className="text-blue-400 group-hover:rotate-90 transition-transform duration-300 md:w-5 md:h-5" />
-                  <span className="text-xs md:text-sm font-semibold tracking-wide text-white">设置</span>
-                </button>
-                </>
-              )}
+            {/* 管理员端显示人数切换，普通用户端显示当前每轮人数标签 */}
+            {isAdmin ? (
+              <div className="flex items-center bg-[color:rgb(var(--color-bg-base-rgb)/0.5)] backdrop-blur-md rounded-xl p-1 border border-white/10 shadow-inner scale-90 md:scale-100 origin-right">
+                {availableBatchSizes.length === 0 ? (
+                  <span className="text-[var(--color-text-muted)] text-xs px-3 py-1">--</span>
+                ) : (
+                  availableBatchSizes.map(num => (
+                    <button
+                      key={num}
+                      onClick={() => handleBatchSizeChange(num)}
+                      disabled={isRolling}
+                      className={`
+                        w-8 h-8 md:w-10 md:h-10 rounded-lg text-sm md:text-base font-bold transition-all flex items-center justify-center
+                        ${batchSize === num 
+                          ? 'bg-[var(--color-primary)] text-white shadow-lg scale-105' 
+                          : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-strong)] hover:bg-white/10'
+                        }
+                        ${isRolling ? 'opacity-50 cursor-not-allowed' : ''}
+                      `}
+                    >
+                      {num}
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center bg-white/5 backdrop-blur-md rounded-xl px-2.5 py-1.5 border border-white/10 text-xs text-white/70">
+                <span className="text-white/90 font-medium">单轮 {batchSize} 人</span>
+              </div>
+            )}
+
+            {/* 设置按钮 - 仅管理员可见（常驻显眼展示） */}
+            {isAdmin && (
+              <>
+              <div className="h-8 w-[1px] bg-white/10 hidden md:block"></div>
+             
+              <button 
+                onClick={() => setSettingsOpen(true)} 
+                className="flex items-center gap-1.5 px-3 py-2 md:px-3.5 md:py-2.5 bg-gradient-to-r from-blue-500/20 to-purple-500/20 hover:from-blue-500/30 hover:to-purple-500/30 rounded-xl text-white border border-blue-400/30 shadow-[0_0_20px_rgba(59,130,246,0.25)] transition-all hover:scale-105 active:scale-95 shrink-0 group"
+                title="项目与抽奖设置"
+              >
+                <Settings size={18} className="text-blue-400 group-hover:rotate-90 transition-transform duration-300 md:w-5 md:h-5" />
+                <span className="text-xs md:text-sm font-semibold tracking-wide text-white">设置</span>
+              </button>
+              </>
+            )}
           </div>
         </header>
 
@@ -1350,7 +1603,7 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
             </div>
             )}
 
-          {/* 启动按钮区域 */}
+          {/* 启动按钮与状态区域 */}
           <div className="mt-4 md:mt-6 z-30 shrink-0 flex items-center justify-center gap-2 md:gap-3">
             {/* Mobile: 奖项切换按钮 - 与主按钮水平对齐 */}
             <button
@@ -1387,57 +1640,85 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
               </button>
             )}
             
-            {/* 主按钮 */}
-            <button
-              onClick={() => {
-                if (isPrizeCompleted && !showAllWinners) {
-                  // 奖项已完成但没在看汇总页 -> 显示汇总页
-                  setShowAllWinners(true);
-                } else {
-                  // 正常抽奖逻辑
-                  toggleLottery();
-                }
-              }}
-              disabled={!currentPrize || (showAllWinners && isPrizeCompleted)}
-              className={`
-                group relative px-5 py-2 md:px-14 md:py-4 rounded-full font-bold text-sm md:text-2xl tracking-wider md:tracking-widest uppercase
-                transition-all duration-300 transform hover:scale-105 active:scale-95
-                shadow-[0_8px_30px_rgba(0,0,0,0.5)] md:shadow-[0_10px_40px_rgba(0,0,0,0.6)]
-                overflow-hidden whitespace-nowrap
-                disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100
-                ${isRolling 
-                  ? 'bg-gradient-to-r from-red-500 to-orange-600 text-white ring-2 md:ring-4 ring-red-500/30' 
-                  : isPrizeCompleted && !showAllWinners
-                    ? 'bg-gradient-to-r from-[var(--color-secondary)] to-[var(--color-primary)] text-white ring-2 md:ring-4 ring-[color:rgb(var(--color-accent-rgb)/0.35)]'
-                    : 'bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-secondary)] text-white ring-2 md:ring-4 ring-[color:rgb(var(--color-primary-rgb)/0.3)]'
-                }
-              `}
-            >
-              <span className="relative z-10 flex items-center gap-1.5 md:gap-3">
+            {/* 管理员端控制按钮 */}
+            {isAdmin ? (
+              <button
+                onClick={() => {
+                  if (isPrizeCompleted && !showAllWinners) {
+                    setShowAllWinners(true);
+                  } else {
+                    toggleLottery();
+                  }
+                }}
+                disabled={!currentPrize || (showAllWinners && isPrizeCompleted)}
+                className={`
+                  group relative px-5 py-2 md:px-14 md:py-4 rounded-full font-bold text-sm md:text-2xl tracking-wider md:tracking-widest uppercase
+                  transition-all duration-300 transform hover:scale-105 active:scale-95
+                  shadow-[0_8px_30px_rgba(0,0,0,0.5)] md:shadow-[0_10px_40px_rgba(0,0,0,0.6)]
+                  overflow-hidden whitespace-nowrap
+                  disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100
+                  ${isRolling 
+                    ? 'bg-gradient-to-r from-red-500 to-orange-600 text-white ring-2 md:ring-4 ring-red-500/30' 
+                    : isPrizeCompleted && !showAllWinners
+                      ? 'bg-gradient-to-r from-[var(--color-secondary)] to-[var(--color-primary)] text-white ring-2 md:ring-4 ring-[color:rgb(var(--color-accent-rgb)/0.35)]'
+                      : 'bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-secondary)] text-white ring-2 md:ring-4 ring-[color:rgb(var(--color-primary-rgb)/0.3)]'
+                  }
+                `}
+              >
+                <span className="relative z-10 flex items-center gap-1.5 md:gap-3">
+                  {isRolling ? (
+                    <>
+                      <Square fill="currentColor" size={16} className="md:w-5 md:h-5"/>
+                      <span>STOP</span>
+                    </>
+                  ) : isPrizeCompleted && !showAllWinners ? (
+                    <>
+                      <Trophy size={16} className="md:w-5 md:h-5"/>
+                      <span>查看{currentPrize?.count}人</span>
+                    </>
+                  ) : showAllWinners ? (
+                    <>
+                      <Trophy size={16} className="md:w-5 md:h-5"/>
+                      <span>已抽完</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play fill="currentColor" size={16} className="md:w-5 md:h-5"/>
+                      <span>抽{batchSize}人</span>
+                    </>
+                  )}
+                </span>
+                <div className="absolute top-0 -inset-full h-full w-1/2 z-5 block transform -skew-x-12 bg-gradient-to-r from-transparent to-white opacity-20 group-hover:animate-shiny" />
+              </button>
+            ) : (
+              /* 用户端：无抽奖按钮，实时同频状态展示 */
+              <div className="flex items-center gap-2">
                 {isRolling ? (
-                  <>
-                    <Square fill="currentColor" size={16} className="md:w-5 md:h-5"/>
-                    <span>STOP</span>
-                  </>
+                  <div className="flex items-center gap-2 px-4 py-2 md:px-8 md:py-3 rounded-full bg-gradient-to-r from-pink-500/20 via-purple-500/20 to-indigo-500/20 border border-pink-400/40 backdrop-blur-md shadow-[0_0_25px_rgba(236,72,153,0.3)] animate-pulse">
+                    <div className="w-2.5 h-2.5 rounded-full bg-pink-400 animate-ping" />
+                    <span className="text-xs md:text-base font-bold text-white tracking-wider">🎉 现场大屏正在抽奖中...</span>
+                  </div>
                 ) : isPrizeCompleted && !showAllWinners ? (
-                  <>
-                    <Trophy size={16} className="md:w-5 md:h-5"/>
-                    <span>查看{currentPrize?.count}人</span>
-                  </>
+                  <button
+                    onClick={() => setShowAllWinners(true)}
+                    className="px-4 py-2 md:px-8 md:py-3 rounded-full font-bold text-xs md:text-sm tracking-wider bg-gradient-to-r from-[var(--color-secondary)] to-[var(--color-primary)] text-white border border-white/20 shadow-lg flex items-center gap-2 hover:scale-105 active:scale-95 transition-all"
+                  >
+                    <Trophy size={16} />
+                    <span>查看中奖名单({currentPrize?.count}人)</span>
+                  </button>
                 ) : showAllWinners ? (
-                  <>
-                    <Trophy size={16} className="md:w-5 md:h-5"/>
-                    <span>已抽完</span>
-                  </>
+                  <div className="flex items-center gap-2 px-4 py-2 md:px-6 md:py-2.5 rounded-full bg-white/10 border border-white/15 backdrop-blur-md text-white/90 text-xs md:text-sm font-medium">
+                    <Trophy size={15} className="text-amber-400" />
+                    <span>本奖项已全部揭晓</span>
+                  </div>
                 ) : (
-                  <>
-                    <Play fill="currentColor" size={16} className="md:w-5 md:h-5"/>
-                    <span>抽{batchSize}人</span>
-                  </>
+                  <div className="flex items-center gap-2 px-4 py-2 md:px-6 md:py-2.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md text-white/80 text-xs md:text-sm font-medium">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400/80"></span>
+                    <span>✨ 关注现场大屏开奖 · 祝您好运</span>
+                  </div>
                 )}
-              </span>
-              <div className="absolute top-0 -inset-full h-full w-1/2 z-5 block transform -skew-x-12 bg-gradient-to-r from-transparent to-white opacity-20 group-hover:animate-shiny" />
-            </button>
+              </div>
+            )}
           </div>
             </main>
         </div>
@@ -1470,6 +1751,46 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
         </footer>
 
       </div>
+
+      {/* 4. 专属中奖弹窗（当当前用户中奖时弹出） */}
+      {currentUserWonPrize && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
+          <div className="relative w-full max-w-sm rounded-3xl p-6 text-center border border-amber-400/50 bg-gradient-to-b from-[#1f1638] to-[#0d091f] shadow-[0_0_50px_rgba(245,158,11,0.4)] animate-scale-up">
+            {/* 关闭按钮 */}
+            <button
+              onClick={() => setCurrentUserWonPrize(null)}
+              className="absolute top-4 right-4 p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-colors"
+            >
+              <X size={18} />
+            </button>
+
+            {/* 奖杯图标 */}
+            <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-gradient-to-tr from-amber-400 to-yellow-200 flex items-center justify-center shadow-[0_0_30px_rgba(251,191,36,0.6)] animate-bounce">
+              <Trophy size={40} className="text-amber-950" />
+            </div>
+
+            <h3 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-yellow-300 to-amber-400 mb-1">
+              🎉 恭喜您中奖啦！
+            </h3>
+            <p className="text-white/80 text-sm font-medium mb-4">
+              好运降临，您已斩获本轮大奖！
+            </p>
+
+            <div className="p-4 rounded-2xl bg-white/10 border border-amber-300/20 mb-5">
+              <div className="text-xs text-amber-300/80 mb-1 font-semibold uppercase tracking-wider">中奖奖项</div>
+              <div className="text-xl font-black text-white">{currentUserWonPrize.prizeName}</div>
+              <div className="text-xs text-white/60 mt-1 font-mono">工号：{currentEmployeeId}</div>
+            </div>
+
+            <button
+              onClick={() => setCurrentUserWonPrize(null)}
+              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-400 to-yellow-500 text-amber-950 font-black text-base shadow-[0_0_20px_rgba(245,158,11,0.4)] hover:scale-[1.02] active:scale-[0.98] transition-all"
+            >
+              太棒了，收下好运！
+            </button>
+          </div>
+        </div>
+      )}
 
       <SettingsPanel
         isOpen={settingsOpen}

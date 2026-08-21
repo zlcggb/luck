@@ -173,4 +173,58 @@ describe('CheckInPage - Employee ID prefix & checkin flow', () => {
     // 验证输入框内只保留数字 0015098，避免重复变成 UU0015098
     expect(idInput).toHaveValue('0015098');
   });
+
+  it('navigates to lottery screen with employee_id query param when entering lottery', async () => {
+    const mockEvent = {
+      id: 'fad30511-b527-4944-a6aa-4b2bbf75d36a',
+      name: '2026-测试',
+      mode: 'rolling' as const,
+      require_location: false,
+      status: 'active' as const,
+    };
+
+    vi.spyOn(supabaseCheckin, 'getEvent').mockResolvedValue(mockEvent as any);
+    vi.spyOn(supabaseCheckin, 'getActiveEvent').mockResolvedValue(mockEvent as any);
+    vi.spyOn(supabaseCheckin, 'isCheckInOpen').mockResolvedValue({ open: true });
+    vi.spyOn(projectSettings, 'loadProjectSettings').mockResolvedValue({
+      employeeIdPrefix: 'U',
+    });
+    vi.spyOn(supabaseCheckin, 'getCheckInByEmployee').mockResolvedValue({
+      id: 'c-dup',
+      event_id: mockEvent.id,
+      employee_id: 'U0015098',
+      name: '周刘成',
+      department: '技术研发部',
+      check_in_time: new Date().toISOString(),
+    } as any);
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={[`/checkin?event=${mockEvent.id}`]}>
+        <CheckInPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('请输入您的姓名')).toBeInTheDocument();
+    });
+
+    await user.type(screen.getByPlaceholderText('请输入您的姓名'), '周刘成');
+    await user.type(screen.getByPlaceholderText('请输入工号数字 (如 0015098)'), '0015098');
+    await user.click(screen.getByRole('button', { name: '签到' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '进入活动抽奖' })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: '进入活动抽奖' }));
+
+    // 验证 sessionStorage 已缓存用户身份
+    const stored = sessionStorage.getItem(`luck_user_${mockEvent.id}`);
+    expect(stored).toBeTruthy();
+    expect(JSON.parse(stored!)).toEqual(expect.objectContaining({
+      employeeId: 'U0015098',
+      name: '周刘成',
+    }));
+  });
 });
