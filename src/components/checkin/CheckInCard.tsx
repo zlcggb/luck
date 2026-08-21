@@ -58,7 +58,7 @@ const CheckInCard = ({
         <img
           src={record.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${record.employeeId}`}
           alt={record.name}
-          className="w-10 h-10 rounded-full border-2 border-green-500/50 object-cover"
+          className="w-10 h-10 rounded-full border-2 border-blue-500/40 object-cover"
         />
         
         {/* 信息 */}
@@ -73,7 +73,7 @@ const CheckInCard = ({
         </div>
         
         {/* 时间 */}
-        <div className="flex items-center gap-1 text-xs text-green-400 shrink-0">
+        <div className="flex items-center gap-1 text-xs text-blue-400 shrink-0">
           <Clock size={12} />
           <span>{formatTime(record.checkInTime)}</span>
         </div>
@@ -86,13 +86,13 @@ const CheckInCard = ({
     return (
       <div
         ref={cardRef}
-        className="relative overflow-hidden bg-gradient-to-br from-green-500/20 via-emerald-600/15 to-teal-500/10 backdrop-blur-xl border border-green-500/30 rounded-3xl p-6 shadow-[0_0_40px_rgba(34,197,94,0.2)] hover:shadow-[0_0_60px_rgba(34,197,94,0.3)] transition-all duration-500 hover:scale-[1.02]"
+        className="relative overflow-hidden bg-gradient-to-br from-blue-500/18 via-indigo-500/12 to-violet-500/10 backdrop-blur-xl border border-blue-500/25 rounded-3xl p-6 shadow-[0_0_40px_rgba(59,130,246,0.16)] hover:shadow-[0_0_60px_rgba(99,102,241,0.22)] transition-all duration-500 hover:scale-[1.02]"
       >
         {/* 背景装饰 */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
+        <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
         
         {/* 签到标记 */}
-        <div className="absolute top-4 right-4 flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-green-500 to-emerald-500 rounded-full text-xs font-bold text-white shadow-lg">
+        <div className="absolute top-4 right-4 flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-500 to-violet-500 rounded-full text-xs font-bold text-white shadow-lg">
           <UserCheck size={14} />
           <span>签到成功</span>
         </div>
@@ -103,9 +103,9 @@ const CheckInCard = ({
             <img
               src={record.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${record.employeeId}`}
               alt={record.name}
-              className="w-24 h-24 rounded-2xl border-4 border-green-500/50 object-cover shadow-2xl"
+              className="w-24 h-24 rounded-2xl border-4 border-blue-500/45 object-cover shadow-2xl"
             />
-            <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-green-500 rounded-full flex items-center justify-center shadow-lg">
+            <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center shadow-lg">
               <UserCheck size={16} className="text-white" />
             </div>
           </div>
@@ -114,12 +114,12 @@ const CheckInCard = ({
         {/* 信息 */}
         <div className="text-center">
           <h3 className="text-2xl font-black text-white mb-1">{record.name}</h3>
-          <p className="text-green-400 font-medium">{record.department || '未知部门'}</p>
+          <p className="text-blue-400 font-medium">{record.department || '未知部门'}</p>
           <p className="text-sm text-gray-400 mt-1">{record.employeeId}</p>
           
           {/* 签到时间 */}
           <div className="flex items-center justify-center gap-2 mt-4 text-sm text-gray-300">
-            <Clock size={14} className="text-green-400" />
+            <Clock size={14} className="text-blue-400" />
             <span>{formatTime(record.checkInTime)}</span>
           </div>
           
@@ -141,10 +141,10 @@ const CheckInCard = ({
   return (
     <div
       ref={cardRef}
-      className="relative overflow-hidden bg-gradient-to-br from-green-500/15 to-emerald-600/10 backdrop-blur-xl border border-green-500/30 rounded-2xl p-4 shadow-[0_0_25px_rgba(34,197,94,0.15)] hover:shadow-[0_0_40px_rgba(34,197,94,0.25)] transition-all duration-300 hover:scale-[1.02]"
+      className="relative overflow-hidden bg-gradient-to-br from-blue-500/15 to-violet-500/10 backdrop-blur-xl border border-blue-500/25 rounded-2xl p-4 shadow-[0_0_25px_rgba(59,130,246,0.14)] hover:shadow-[0_0_40px_rgba(99,102,241,0.2)] transition-all duration-300 hover:scale-[1.02]"
     >
       {/* 背景装饰 */}
-      <div className="absolute top-0 right-0 w-20 h-20 bg-green-500/10 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2" />
+      <div className="absolute top-0 right-0 w-20 h-20 bg-violet-500/10 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2" />
       
       <div className="flex items-center gap-4">
         {/* 头像 */}
@@ -152,9 +152,9 @@ const CheckInCard = ({
           <img
             src={record.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${record.employeeId}`}
             alt={record.name}
-            className="w-14 h-14 rounded-xl border-2 border-green-500/50 object-cover shadow-lg"
+            className="w-14 h-14 rounded-xl border-2 border-blue-500/45 object-cover shadow-lg"
           />
-          <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center shadow-md">
+          <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center shadow-md">
             <UserCheck size={10} className="text-white" />
           </div>
         </div>
@@ -164,7 +164,7 @@ const CheckInCard = ({
           <div className="flex items-center gap-2">
             <h3 className="font-bold text-white text-lg truncate">{record.name}</h3>
           </div>
-          <p className="text-sm text-green-400/80 truncate">{record.department || '未知部门'}</p>
+          <p className="text-sm text-blue-400/80 truncate">{record.department || '未知部门'}</p>
           <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
             <span>{record.employeeId}</span>
             <span className="flex items-center gap-1">

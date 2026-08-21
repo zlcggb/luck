@@ -6,20 +6,20 @@ import {
   LuckCheckIn,
   LuckPrize,
   LuckWinner,
-  createWinner,
-  getCheckInByEmployee,
+  drawPersonalWheel,
+  getCheckInById,
   getEvent,
+  getPersonalWheelWinner,
   getPrizes,
-  getWinners,
 } from '../utils/supabaseCheckin';
 
 // ==========================================
 // 🎨 品牌定制配置区 (浅色欧式复古系)
 // ==========================================
 const BRAND_CONFIG = {
-  primaryColor: "#003cff",
-  secondaryColor: "#00cb35",
-  accentColor: "#ff1e00",
+  primaryColor: "#3b82f6",
+  secondaryColor: "#10b981",
+  accentColor: "#ef4444",
   eventName: "ISLE 2026 展会抽奖"
 };
 
@@ -53,23 +53,11 @@ const createTextArc = (cx: number, cy: number, r: number, startAngle: number, en
 
 const SPIN_DURATION_MS = 6000;
 
-const pickWeightedPrize = (pool: LuckPrize[]): LuckPrize | null => {
-  const totalWeight = pool.reduce((sum, prize) => sum + Math.max(prize.remaining, 0), 0);
-  if (totalWeight <= 0) return null;
-
-  let random = Math.random() * totalWeight;
-  for (const prize of pool) {
-    random -= Math.max(prize.remaining, 0);
-    if (random <= 0) return prize;
-  }
-  return pool[pool.length - 1] || null;
-};
-
 const PersonalWheelPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const eventId = searchParams.get('event');
-  const employeeId = searchParams.get('employee');
+  const checkInId = eventId ? sessionStorage.getItem(`luck_checkin_token_${eventId}`) : null;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -85,7 +73,7 @@ const PersonalWheelPage = () => {
   useEffect(() => {
     let active = true;
     const init = async () => {
-      if (!eventId || !employeeId) {
+      if (!eventId || !checkInId) {
         setError('参数不完整，请返回重新扫码');
         setLoading(false);
         return;
@@ -93,19 +81,17 @@ const PersonalWheelPage = () => {
       setLoading(true);
       setError('');
       try {
-        const [event, checkIn, prizes, winners] = await Promise.all([
+        const [event, checkIn, prizes, existingWinner] = await Promise.all([
           getEvent(eventId),
-          getCheckInByEmployee(eventId, employeeId),
+          getCheckInById(eventId, checkInId),
           getPrizes(eventId),
-          getWinners(eventId),
+          getPersonalWheelWinner(eventId, checkInId),
         ]);
         if (!active) return;
         if (!event) { setError('活动已失效'); setLoading(false); return; }
         if (!checkIn) { setError('请先完成访客登记'); setLoading(false); return; }
 
         const activePrizes = prizes.filter((p) => p.is_active && p.remaining > 0);
-        const existingWinner = winners.find((w) => w.employee_id === employeeId) || null;
-
         setEventName(event.name);
         setCheckInRecord(checkIn);
         setAvailablePrizes(activePrizes);
@@ -125,56 +111,34 @@ const PersonalWheelPage = () => {
     };
     init();
     return () => { active = false; };
-  }, [employeeId, eventId]);
+  }, [checkInId, eventId]);
 
   const handleDraw = async () => {
-    if (!eventId || !employeeId || !checkInRecord || winner || isSpinning || availablePrizes.length === 0) return;
-
-    const chosen = pickWeightedPrize(availablePrizes);
-    if (!chosen) { setActionError('奖池已空'); return; }
+    if (!eventId || !checkInRecord || winner || isSpinning || availablePrizes.length === 0) return;
 
     setActionError('');
     setIsSpinning(true);
 
-    const sliceAngle = 360 / availablePrizes.length;
-    const targetIndex = availablePrizes.findIndex((p) => p.id === chosen.id);
-    const newRotation = rotation + (360 * 8) - (rotation % 360) - (targetIndex * sliceAngle);
-    setRotation(newRotation);
+    try {
+      const drawResult = await drawPersonalWheel(eventId, checkInRecord.id);
+      if (!drawResult.success || !drawResult.data) {
+        setActionError(drawResult.error || '抽奖失败，请重试');
+        setIsSpinning(false);
+        return;
+      }
 
-    setTimeout(async () => {
-      try {
-        const latestWinners = await getWinners(eventId);
-        const existingWinner = latestWinners.find((w) => w.employee_id === employeeId) || null;
-        if (existingWinner) {
-          setWinner(existingWinner);
-          setIsSpinning(false);
-          setStep(2);
-          return;
-        }
+      const serverWinner = drawResult.data;
+      const finalPrize = availablePrizes.find((prize) => prize.id === serverWinner.prize_id)
+        || (await getPrizes(eventId)).find((prize) => prize.id === serverWinner.prize_id);
+      if (!finalPrize) throw new Error('奖项不存在');
 
-        const latestPrizes = (await getPrizes(eventId)).filter((p) => p.is_active && p.remaining > 0);
-        if (latestPrizes.length === 0) {
-          setActionError('奖池已空');
-          setIsSpinning(false);
-          return;
-        }
+      const sliceAngle = 360 / availablePrizes.length;
+      const targetIndex = Math.max(0, availablePrizes.findIndex((prize) => prize.id === finalPrize.id));
+      const newRotation = rotation + (360 * 8) - (rotation % 360) - (targetIndex * sliceAngle);
+      setRotation(newRotation);
 
-        const finalPrize =
-          latestPrizes.find((p) => p.id === chosen.id && p.remaining > 0) ||
-          pickWeightedPrize(latestPrizes);
-
-        if (!finalPrize) { setActionError('奖池已空'); setIsSpinning(false); return; }
-
-        const createdWinner = await createWinner(eventId, finalPrize.id, {
-          participant_id: undefined,
-          employee_id: employeeId,
-          name: checkInRecord.name,
-          department: checkInRecord.department || undefined,
-          avatar: checkInRecord.avatar || undefined,
-        });
-        if (!createdWinner) throw new Error('保存失败');
-
-        const winnerWithPrize: LuckWinner = { ...createdWinner, prize: finalPrize };
+      setTimeout(() => {
+        const winnerWithPrize: LuckWinner = { ...serverWinner, prize: finalPrize };
         setWinner(winnerWithPrize);
         setAvailablePrizes((prev) =>
           prev
@@ -182,12 +146,12 @@ const PersonalWheelPage = () => {
             .filter((p) => p.remaining > 0)
         );
         setStep(2);
-      } catch {
-        setActionError('网络超时，未保存');
-      } finally {
         setIsSpinning(false);
-      }
-    }, SPIN_DURATION_MS);
+      }, SPIN_DURATION_MS);
+    } catch {
+      setActionError('网络超时，未保存');
+      setIsSpinning(false);
+    }
   };
 
   const prizeDisplayList = useMemo(() => availablePrizes, [availablePrizes]);
@@ -195,7 +159,7 @@ const PersonalWheelPage = () => {
   // Loading state
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#FDFBF7] flex items-center justify-center">
+      <div className="vip-ui min-h-screen bg-[#FDFBF7] flex items-center justify-center">
         <Loader2 className="w-10 h-10 text-[#003cff]/40 animate-spin" />
       </div>
     );
@@ -204,7 +168,7 @@ const PersonalWheelPage = () => {
   // Error state
   if (error && step === 0) {
     return (
-      <div className="min-h-screen bg-[#FDFBF7] flex flex-col items-center justify-center p-6">
+      <div className="vip-ui min-h-screen bg-[#FDFBF7] flex flex-col items-center justify-center p-6">
         <div className="bg-white/60 backdrop-blur-xl p-8 rounded-2xl border border-[#003cff]/10 max-w-sm w-full text-center" style={{ boxShadow: '0 15px 40px -5px rgba(0,60,255,0.08)' }}>
           <AlertCircle className="w-12 h-12 text-[#ff1e00] mx-auto mb-4" />
           <h2 className="text-xl font-bold text-[#1a2332] mb-2" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>出错了</h2>
@@ -222,7 +186,7 @@ const PersonalWheelPage = () => {
   }
 
   return (
-    <div className="h-screen bg-[#FDFBF7] text-[#2c3e50] overflow-hidden relative flex flex-col" style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
+    <div className="vip-ui h-screen bg-[#FDFBF7] text-[#2c3e50] overflow-hidden relative flex flex-col" style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
 
       {/* 欧式古典暗纹背景 */}
       <div className="absolute inset-0 pointer-events-none opacity-[0.04]"

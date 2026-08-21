@@ -39,3 +39,9 @@ Thumbs.db
 
 # Optional: lock file (uncomment if you want to ignore)
 # package-lock.json
+
+# Local tool configs & temporary files
+.gemini/
+.codex/
+.codegraph/
+supabase/.temp/

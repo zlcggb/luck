@@ -179,41 +179,35 @@ export interface CheckInParams {
 export const checkIn = async (params: CheckInParams): Promise<{ success: boolean; data?: LuckCheckIn; error?: string }> => {
   const { eventId, employeeId, name, department, avatar, location } = params;
 
-  // 检查是否已签到
-  const { data: existing } = await supabase
-    .from('luck_check_ins')
-    .select('*')
-    .eq('event_id', eventId)
-    .eq('employee_id', employeeId)
-    .single();
-
-  if (existing) {
-    return { success: false, error: '您已签到，无需重复签到', data: existing };
-  }
-
-  // 创建签到记录
   const { data, error } = await supabase
-    .from('luck_check_ins')
-    .insert({
-      event_id: eventId,
-      employee_id: employeeId,
-      name,
-      department,
-      avatar: avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${employeeId}`,
-      location_lat: location?.latitude,
-      location_lng: location?.longitude,
-      location_accuracy: location?.accuracy,
-      check_in_method: 'qrcode',
+    .rpc('participant_check_in', {
+      p_event_id: eventId,
+      p_employee_id: employeeId,
+      p_name: name,
+      p_department: department || null,
+      p_avatar: avatar || null,
+      p_location_lat: location?.latitude ?? null,
+      p_location_lng: location?.longitude ?? null,
+      p_location_accuracy: location?.accuracy ?? null,
+      p_check_in_method: 'qrcode',
     })
-    .select()
     .single();
 
   if (error) {
     console.error('签到失败:', error);
-    return { success: false, error: '签到失败，请重试' };
+    const messages: Record<string, string> = {
+      CHECK_IN_CLOSED: '签到通道未开启或已经结束',
+      EVENT_NOT_FOUND: '活动不存在或已失效',
+      LOCATION_REQUIRED: '本活动需要获取定位后才能签到',
+      OUTSIDE_CHECK_IN_RANGE: '您不在活动签到范围内',
+      INVALID_EMPLOYEE_ID: '请输入有效的工号',
+      INVALID_NAME: '请输入有效的姓名',
+    };
+    const knownError = Object.entries(messages).find(([code]) => error.message.includes(code));
+    return { success: false, error: knownError?.[1] || '签到失败，请重试' };
   }
 
-  return { success: true, data };
+  return { success: true, data: data as LuckCheckIn };
 };
 
 export const getCheckInByEmployee = async (eventId: string, employeeId: string): Promise<LuckCheckIn | null> => {
@@ -228,6 +222,33 @@ export const getCheckInByEmployee = async (eventId: string, employeeId: string):
     return null;
   }
   return data;
+};
+
+export const getCheckInById = async (eventId: string, checkInId: string): Promise<LuckCheckIn | null> => {
+  const { data, error } = await supabase
+    .rpc('get_check_in_by_token', {
+      p_event_id: eventId,
+      p_check_in_id: checkInId,
+    })
+    .maybeSingle();
+
+  if (error) return null;
+  return data as LuckCheckIn | null;
+};
+
+export const getPersonalWheelWinner = async (
+  eventId: string,
+  checkInId: string
+): Promise<LuckWinner | null> => {
+  const { data, error } = await supabase
+    .rpc('get_personal_wheel_winner', {
+      p_event_id: eventId,
+      p_check_in_id: checkInId,
+    })
+    .maybeSingle();
+
+  if (error) return null;
+  return data as LuckWinner | null;
 };
 
 // ============================================
@@ -291,6 +312,29 @@ export const subscribeToCheckIns = (
   };
 };
 
+export const subscribeToParticipants = (
+  eventId: string,
+  callback: (participant: LuckParticipant) => void
+) => {
+  const channel = supabase
+    .channel(`luck_participants_${eventId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'luck_participants',
+        filter: `event_id=eq.${eventId}`,
+      },
+      (payload) => callback(payload.new as LuckParticipant)
+    )
+    .subscribe();
+
+  return () => {
+    void supabase.removeChannel(channel);
+  };
+};
+
 // ============================================
 // 参与者查询
 // ============================================
@@ -303,6 +347,24 @@ export const getParticipants = async (eventId: string): Promise<LuckParticipant[
 
   if (error) {
     console.error('获取参与者列表失败:', error);
+    return [];
+  }
+  return data || [];
+};
+
+/**
+ * 获取已签到的参与者列表（用于抽奖池）
+ * 只返回 status='checked_in' 的参与者
+ */
+export const getCheckedInParticipants = async (eventId: string): Promise<LuckParticipant[]> => {
+  const { data, error } = await supabase
+    .from('luck_participants')
+    .select('*')
+    .eq('event_id', eventId)
+    .eq('status', 'checked_in');
+
+  if (error) {
+    console.error('获取已签到参与者失败:', error);
     return [];
   }
   return data || [];
@@ -888,6 +950,55 @@ export const getWinners = async (eventId: string): Promise<LuckWinner[]> => {
   }
 
   return data as LuckWinner[];
+};
+
+export const drawRollingWinners = async (
+  eventId: string,
+  prizeId: string,
+  count: number
+): Promise<{ success: boolean; data?: LuckWinner[]; error?: string }> => {
+  const { data, error } = await supabase.rpc('draw_rolling_winners', {
+    p_event_id: eventId,
+    p_prize_id: prizeId,
+    p_count: count,
+  });
+
+  if (error) {
+    console.error('轮动抽奖失败:', error);
+    const messages: Record<string, string> = {
+      EVENT_OWNER_REQUIRED: '当前账号无权操作此活动',
+      ROLLING_EVENT_REQUIRED: '该活动不是轮动抽奖模式',
+      PRIZE_NOT_FOUND: '奖项不存在或已经停用',
+      INSUFFICIENT_PRIZE_REMAINING: '奖项剩余名额不足',
+      INSUFFICIENT_ELIGIBLE_PARTICIPANTS: '抽奖池人数不足',
+    };
+    const knownError = Object.entries(messages).find(([code]) => error.message.includes(code));
+    return { success: false, error: knownError?.[1] || '开奖失败，请检查网络后重试' };
+  }
+
+  return { success: true, data: (data || []) as LuckWinner[] };
+};
+
+export const drawPersonalWheel = async (
+  eventId: string,
+  checkInId: string
+): Promise<{ success: boolean; data?: LuckWinner; error?: string }> => {
+  const { data, error } = await supabase
+    .rpc('draw_personal_wheel', {
+      p_event_id: eventId,
+      p_check_in_id: checkInId,
+    })
+    .single();
+
+  if (error) {
+    console.error('个人转盘抽奖失败:', error);
+    const message = error.message.includes('PRIZE_UNAVAILABLE')
+      ? '当前奖池已空'
+      : '抽奖失败，请重试';
+    return { success: false, error: message };
+  }
+
+  return { success: true, data: data as LuckWinner };
 };
 
 /**

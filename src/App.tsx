@@ -45,9 +45,13 @@ import {
   getBackgroundMusicFromSettings,
 } from './utils/projectSettings';
 import {
-  getParticipants,
+  drawRollingWinners,
+  getCheckedInParticipants,
   getPrizes as getDbPrizes,
+  getWinners,
+  subscribeToParticipants,
 } from './utils/supabaseCheckin';
+import { buildRollingPool, mergeCheckedInParticipant } from './utils/rollingPool';
 import {
   DEFAULT_AVATAR_THEME_ID,
   getAvatarCandidatesForParticipant,
@@ -112,6 +116,8 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
     const init = async () => {
       let loadedParticipants: Participant[] = [];
       let loadedPrizes: Prize[] = DEFAULT_PRIZES;
+      let loadedRecords: DrawRecord[] = [];
+      let loadedExcludedIds = new Set<string>();
 
       // 如果有 eventId，优先从数据库加载
       if (eventId) {
@@ -125,19 +131,27 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
             setBackgroundMusic(getBackgroundMusicFromSettings(dbSettings));
           }
 
-          // 加载参与者
-          const dbParticipants = await getParticipants(eventId);
-          if (dbParticipants.length > 0) {
-            loadedParticipants = dbParticipants.map(p => ({
-              id: p.employee_id,
-              name: p.name,
-              dept: p.department || '',
-              avatar: p.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.employee_id}`,
-            }));
-          }
+          const [dbParticipants, dbPrizes, dbWinners] = await Promise.all([
+            getCheckedInParticipants(eventId),
+            getDbPrizes(eventId),
+            getWinners(eventId),
+          ]);
 
-          // 加载奖项
-          const dbPrizes = await getDbPrizes(eventId);
+          loadedParticipants = buildRollingPool(dbParticipants, new Set());
+          loadedExcludedIds = new Set(dbWinners.map(winner => winner.employee_id.trim().toUpperCase()));
+          loadedRecords = dbWinners.map(winner => ({
+            id: winner.id,
+            timestamp: new Date(winner.won_at).getTime(),
+            prizeId: winner.prize_id,
+            prizeName: winner.prize?.name || '已中奖项',
+            winners: [{
+              id: winner.employee_id.trim().toUpperCase(),
+              name: winner.name,
+              dept: winner.department || '',
+              avatar: winner.avatar || undefined,
+            }],
+          }));
+
           if (dbPrizes.length > 0) {
             loadedPrizes = dbPrizes.map(p => ({
               id: p.id,
@@ -149,12 +163,12 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
             }));
           }
         } catch (err) {
-          console.error('从数据库加载项目数据失败，回退到 localStorage:', err);
+          console.error('从数据库加载项目数据失败:', err);
         }
       }
 
-      // Fallback: 如果数据库没有数据，从 localStorage 加载
-      if (loadedParticipants.length === 0) {
+      // 只有本地演示模式才允许使用 mock/localStorage；真实活动空池即为空池。
+      if (!eventId && loadedParticipants.length === 0) {
         const saved = loadParticipants();
         loadedParticipants = saved.length > 0 ? saved : MOCK_PARTICIPANTS;
       }
@@ -165,12 +179,14 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
         setCustomThemePalette(loadCustomThemePalette());
         setAvatarThemeId(loadAvatarThemeId());
         loadedPrizes = loadPrizes();
+        loadedRecords = loadRecords();
+        loadedExcludedIds = loadExcludedIds();
       }
 
       setParticipants(loadedParticipants);
       setPrizes(loadedPrizes);
-      setRecords(loadRecords());
-      setExcludedIds(loadExcludedIds());
+      setRecords(loadedRecords);
+      setExcludedIds(loadedExcludedIds);
       
       // 设置默认选中的奖项
       if (loadedPrizes.length > 0) {
@@ -185,26 +201,33 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
     init();
   }, [eventId]);
 
+  useEffect(() => {
+    if (!eventId) return;
+    return subscribeToParticipants(eventId, participant => {
+      setParticipants(current => mergeCheckedInParticipant(current, participant));
+    });
+  }, [eventId]);
+
   // --- 持久化数据（只在初始化完成后才保存） ---
   useEffect(() => {
-    if (!isInitialized) return;
+    if (!isInitialized || eventId) return;
     saveParticipants(participants);
-  }, [participants, isInitialized]);
+  }, [participants, isInitialized, eventId]);
 
   useEffect(() => {
-    if (!isInitialized) return;
+    if (!isInitialized || eventId) return;
     savePrizes(prizes);
-  }, [prizes, isInitialized]);
+  }, [prizes, isInitialized, eventId]);
 
   useEffect(() => {
-    if (!isInitialized) return;
+    if (!isInitialized || eventId) return;
     saveRecords(records);
-  }, [records, isInitialized]);
+  }, [records, isInitialized, eventId]);
 
   useEffect(() => {
-    if (!isInitialized) return;
+    if (!isInitialized || eventId) return;
     saveExcludedIds(excludedIds);
-  }, [excludedIds, isInitialized]);
+  }, [excludedIds, isInitialized, eventId]);
 
   useEffect(() => {
     if (!isInitialized) return;
@@ -438,7 +461,7 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
   // --- 核心逻辑：开始/停止抽奖 ---
   const toggleLottery = () => {
     if (isRolling) {
-      stopLottery();
+      void stopLottery();
     } else {
       startLottery();
     }
@@ -477,14 +500,33 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
     }, 80);
   };
 
-  const stopLottery = () => {
+  const stopLottery = async () => {
     if (!timerRef.current || !currentPrize) return;
     
     clearInterval(timerRef.current);
+    timerRef.current = null;
+
+    let finalWinners: Participant[];
+    if (eventId) {
+      const result = await drawRollingWinners(eventId, currentPrize.id, batchSize);
+      if (!result.success || !result.data) {
+        setIsRolling(false);
+        setShowConfetti(false);
+        showWarning(result.error || '开奖失败，请重试');
+        return;
+      }
+      finalWinners = result.data.map(winner => ({
+        id: winner.employee_id.trim().toUpperCase(),
+        name: winner.name,
+        dept: winner.department || '',
+        avatar: winner.avatar || undefined,
+      }));
+    } else {
+      finalWinners = getRandomBatch(availableParticipants, batchSize);
+    }
+
     setIsRolling(false);
     setShowConfetti(true);
-
-    const finalWinners = getRandomBatch(availableParticipants, batchSize);
     setCurrentDisplay(finalWinners);
     setHasDrawn(true);
     

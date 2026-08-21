@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckInRecord } from '../../types/checkin';
-import CheckInCard from './CheckInCard';
-import { Activity, Users } from 'lucide-react';
+import { Activity, BadgeCheck, Building2, Clock3, IdCard, ScanLine, Users } from 'lucide-react';
+import type { CheckInRecord } from '../../types/checkin';
 
 interface RealtimeFeedProps {
   records: CheckInRecord[];
@@ -10,169 +9,101 @@ interface RealtimeFeedProps {
   animationStyle?: 'slide' | 'fade' | 'bounce';
 }
 
-/**
- * 实时签到动态组件
- * 用于大屏展示实时签到信息
- */
-const RealtimeFeed = ({
-  records,
-  maxDisplay = 10,
-  autoScroll = true,
-  animationStyle = 'slide',
-}: RealtimeFeedProps) => {
+const formatTime = (isoString: string): string => new Date(isoString).toLocaleTimeString('zh-CN', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
+const RealtimeFeed = ({ records, maxDisplay = 10, autoScroll = true, animationStyle = 'slide' }: RealtimeFeedProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [displayRecords, setDisplayRecords] = useState<CheckInRecord[]>([]);
-  const prevRecordsRef = useRef<CheckInRecord[]>([]);
 
-  // 更新显示的记录，处理新增动画
-  useEffect(() => {
-    const prevIds = new Set(prevRecordsRef.current.map(r => r.id));
-    const newRecords = records.filter(r => !prevIds.has(r.id));
-    
-    // 如果有新记录，触发动画
-    if (newRecords.length > 0) {
-      setDisplayRecords(records.slice(0, maxDisplay));
-    } else {
-      setDisplayRecords(records.slice(0, maxDisplay));
-    }
-    
-    prevRecordsRef.current = records;
-  }, [records, maxDisplay]);
+  useEffect(() => setDisplayRecords(records.slice(0, maxDisplay)), [records, maxDisplay]);
 
-  // 自动滚动到底部
   useEffect(() => {
-    if (autoScroll && containerRef.current) {
-      containerRef.current.scrollTo({
-        top: 0,
-        behavior: 'smooth'
-      });
+    if (autoScroll && containerRef.current && typeof containerRef.current.scrollTo === 'function') {
+      containerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, [displayRecords, autoScroll]);
 
-  const getAnimationClass = (index: number) => {
-    const delay = `${index * 50}ms`;
-    switch (animationStyle) {
-      case 'slide':
-        return {
-          animation: `slideIn 0.5s ease-out ${delay} forwards`,
-          opacity: 0,
-          transform: 'translateX(-20px)',
-        };
-      case 'bounce':
-        return {
-          animation: `bounceIn 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55) ${delay} forwards`,
-          opacity: 0,
-          transform: 'scale(0.8)',
-        };
-      case 'fade':
-      default:
-        return {
-          animation: `fadeIn 0.4s ease-out ${delay} forwards`,
-          opacity: 0,
-        };
-    }
-  };
+  const featuredRecord = displayRecords[0];
+  const recentRecords = displayRecords.slice(1);
 
   return (
-    <div className="flex flex-col h-full">
-      {/* 标题 */}
-      <div className="flex items-center justify-between mb-4 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <Activity size={20} className="text-green-400" />
-            <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full animate-ping" />
-            <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full" />
-          </div>
-          <h3 className="text-lg font-bold text-white">实时动态</h3>
+    <section className="checkin-feed" aria-label="实时签到舞台">
+      <header className="checkin-panel-heading">
+        <div className="checkin-panel-title">
+          <span className="checkin-live-mark" aria-hidden="true"><Activity size={19} /></span>
+          <div><p className="checkin-overline">LIVE ARRIVALS</p><h2>实时签到</h2></div>
         </div>
-        <div className="flex items-center gap-2 text-sm text-gray-400">
-          <Users size={14} />
-          <span>{records.length} 人已签到</span>
-        </div>
-      </div>
+        <div className="checkin-count-badge"><Users size={15} aria-hidden="true" /><strong className="tabular-nums">{records.length}</strong><span>人已签到</span></div>
+      </header>
 
-      {/* 签到列表 */}
-      <div 
-        ref={containerRef}
-        className="flex-1 overflow-y-auto space-y-3 no-scrollbar pr-2"
-      >
-        {displayRecords.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-500 py-12">
-            <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-4">
-              <Users size={28} className="text-gray-600" />
-            </div>
-            <p className="text-center">暂无签到记录</p>
-            <p className="text-sm text-gray-600 mt-1">等待第一位签到者...</p>
-          </div>
+      <div ref={containerRef} className="checkin-feed-scroll">
+        {featuredRecord ? (
+          <>
+            <article className={`checkin-spotlight checkin-enter-${animationStyle}`}>
+              <div className="checkin-spotlight-glow" aria-hidden="true" />
+              <div className="checkin-spotlight-copy">
+                <div className="checkin-latest-label"><BadgeCheck size={15} aria-hidden="true" />最新签到</div>
+                <div className="checkin-featured-person">
+                  <div className="checkin-featured-avatar-wrap">
+                    <img src={featuredRecord.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${featuredRecord.employeeId}`} alt={featuredRecord.name} className="checkin-featured-avatar" />
+                    <span className="checkin-avatar-status" aria-label="签到成功"><BadgeCheck size={16} /></span>
+                  </div>
+                  <div className="checkin-featured-info">
+                    <p className="checkin-welcome-line">欢迎抵达活动现场</p>
+                    <h3>{featuredRecord.name}</h3>
+                    <div className="checkin-person-meta">
+                      <span><Building2 size={15} aria-hidden="true" />{featuredRecord.department || '未分配部门'}</span>
+                      <span><IdCard size={15} aria-hidden="true" />{featuredRecord.employeeId}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="checkin-arrival-time">
+                <span><Clock3 size={17} aria-hidden="true" />签到时间</span>
+                <strong className="tabular-nums">{formatTime(featuredRecord.checkInTime)}</strong>
+                <small>{featuredRecord.checkInMethod === 'manual' ? '现场登记' : '扫码签到'}</small>
+              </div>
+            </article>
+
+            <section className="checkin-sequence" aria-label="签到序列">
+              <div className="checkin-sequence-heading">
+                <div><p className="checkin-overline">ARRIVAL SEQUENCE</p><h3>签到序列</h3></div>
+                <span>按签到时间倒序</span>
+              </div>
+              {recentRecords.length > 0 ? (
+                <div className="checkin-sequence-list">
+                  {recentRecords.map((record, index) => (
+                    <article key={record.id} className={`checkin-sequence-row checkin-enter-${animationStyle}`} style={{ animationDelay: `${index * 50}ms` }}>
+                      <span className="checkin-sequence-index tabular-nums">{String(index + 2).padStart(2, '0')}</span>
+                      <img src={record.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${record.employeeId}`} alt="" className="checkin-sequence-avatar" />
+                      <div className="checkin-sequence-person"><strong>{record.name}</strong><span>{record.department || '未分配部门'} · {record.employeeId}</span></div>
+                      <time className="tabular-nums" dateTime={record.checkInTime}>{formatTime(record.checkInTime)}</time>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="checkin-next-arrival">
+                  <span className="checkin-scan-icon" aria-hidden="true"><ScanLine size={23} /></span>
+                  <div><strong>等待下一位嘉宾</strong><p>新签到将实时出现在这里</p></div>
+                  <span className="checkin-waiting-dots" aria-hidden="true"><i /><i /><i /></span>
+                </div>
+              )}
+            </section>
+          </>
         ) : (
-          displayRecords.map((record, index) => (
-            <div
-              key={record.id}
-              style={getAnimationClass(index)}
-              className="transform-gpu"
-            >
-              <CheckInCard 
-                record={record} 
-                variant="compact"
-                showAnimation={false}
-              />
-            </div>
-          ))
+          <div className="checkin-empty-stage">
+            <span className="checkin-empty-orbit" aria-hidden="true"><ScanLine size={34} /></span>
+            <p className="checkin-overline">READY FOR ARRIVALS</p>
+            <h3>等待首位嘉宾签到</h3>
+            <p>二维码入口已就绪，新的签到记录会实时呈现。</p>
+          </div>
         )}
       </div>
-
-      {/* 底部提示 */}
-      {records.length > maxDisplay && (
-        <div className="pt-3 mt-3 border-t border-white/10 text-center text-sm text-gray-500 shrink-0">
-          显示最新 {maxDisplay} 条记录，共 {records.length} 人签到
-        </div>
-      )}
-
-      {/* 动画样式 */}
-      <style>{`
-        @keyframes slideIn {
-          from {
-            opacity: 0;
-            transform: translateX(-20px);
-          }
-          to {
-            opacity: 1;
-            transform: translateX(0);
-          }
-        }
-        
-        @keyframes bounceIn {
-          from {
-            opacity: 0;
-            transform: scale(0.8);
-          }
-          50% {
-            transform: scale(1.05);
-          }
-          to {
-            opacity: 1;
-            transform: scale(1);
-          }
-        }
-        
-        @keyframes fadeIn {
-          from {
-            opacity: 0;
-          }
-          to {
-            opacity: 1;
-          }
-        }
-        
-        .no-scrollbar::-webkit-scrollbar {
-          display: none;
-        }
-        .no-scrollbar {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
-        }
-      `}</style>
-    </div>
+    </section>
   );
 };
 

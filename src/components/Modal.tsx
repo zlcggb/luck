@@ -91,15 +91,15 @@ const Modal = ({
   }[type];
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+    <div className="vip-ui fixed inset-0 z-[100] flex items-center justify-center p-4">
       {/* 遮罩层 */}
       <div 
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fadeIn"
+        className="vip-modal-backdrop absolute inset-0 animate-fadeIn"
         onClick={handleCancel}
       />
       
       {/* 弹窗内容 */}
-      <div className="relative bg-gradient-to-br from-[#1a1535] to-[#0f0c29] border border-white/10 rounded-2xl shadow-2xl max-w-md w-full animate-scaleIn overflow-hidden">
+      <div className="vip-modal relative max-w-md w-full animate-scaleIn overflow-hidden">
         {/* 顶部装饰条 */}
         <div className={`h-1 w-full ${
           type === 'success' ? 'bg-gradient-to-r from-green-500 to-emerald-500' :
@@ -138,7 +138,7 @@ const Modal = ({
             {(showCancel || type === 'confirm') && (
               <button
                 onClick={handleCancel}
-                className="flex-1 py-3 px-4 bg-white/5 hover:bg-white/10 text-gray-300 font-medium rounded-xl transition-colors border border-white/10"
+                className="vip-button-secondary flex-1 py-3 px-4 font-medium"
               >
                 {cancelText}
               </button>
@@ -152,7 +152,7 @@ const Modal = ({
                   ? 'bg-green-500 hover:bg-green-600 text-white shadow-green-500/20'
                   : type === 'warning' || type === 'confirm'
                   ? 'bg-orange-500 hover:bg-orange-600 text-white shadow-orange-500/20'
-                  : 'bg-gradient-to-r from-[#3c80fa] to-[#573cfa] text-white shadow-blue-500/20'
+                  : 'vip-button-primary text-white shadow-blue-500/20'
               }`}
             >
               {confirmText}

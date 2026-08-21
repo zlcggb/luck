@@ -1,24 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { QRCodeSVG } from 'qrcode.react';
 import { 
   QrCode, 
-  Users, 
   Sparkles, 
-  Clock, 
-  MapPin,
-  ArrowLeft,
   RefreshCw,
-  Volume2,
-  VolumeX,
-  Maximize,
-  X,
-  ExternalLink,
-  Copy,
   Check,
   Play,
-  Square,
-  Timer
 } from 'lucide-react';
 import { 
   LuckEvent,
@@ -38,23 +25,17 @@ import { loadCheckInSettings } from '../utils/checkinStorage';
 
 import CheckInStats from '../components/checkin/CheckInStats';
 import RealtimeFeed from '../components/checkin/RealtimeFeed';
-
-// 配置色系
-const COLORS = {
-  primary: '#3c80fa',
-  secondary: '#573cfa',
-  accent: '#b63cfa',
-  success: '#22c55e',
-  dark: '#0f0c29',
-};
+import CheckInDisplayHeader, { formatCheckInRemainingTime } from '../components/checkin/CheckInDisplayHeader';
+import CheckInQrModal from '../components/checkin/CheckInQrModal';
+import { useUiAppearance } from '../contexts/UiAppearanceContext';
 
 // 祝福语列表
 const GREETINGS = [
-  '欢迎参加年度盛典！🎉',
-  '祝您好运连连！🍀',
-  '愿您今晚满载而归！🎁',
-  '开启幸运之旅！✨',
-  '欢迎来到幸运之夜！🌟',
+  '欢迎参加年度盛典',
+  '祝您今晚好运连连',
+  '愿您今晚满载而归',
+  '欢迎开启幸运之旅',
+  '欢迎来到活动现场',
 ];
 
 // 签到时长选项（分钟）
@@ -77,6 +58,7 @@ interface CheckInDisplayPageProps {
  * 连接 Supabase 数据库，实时展示签到动态
  */
 const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPageProps) => {
+  const { appearance } = useUiAppearance();
   // 从 URL 读取 event 参数（fallback）
   const [searchParams] = useSearchParams();
   const urlEventId = searchParams.get('event');
@@ -92,7 +74,8 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
   const [_isFullscreen, setIsFullscreen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showQRModal, setShowQRModal] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [actionError, setActionError] = useState('');
 
   
   // 签到队列：支持多人同时签到时依次展示
@@ -146,6 +129,7 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
         // 获取签到记录
         const checkIns = await getCheckInRecords(activeEvent.id, 50);
         setRecords(checkIns);
+        setLatestRecord(checkIns[0] ?? null);
         
         // 获取签到人数
         const count = await getCheckInCount(activeEvent.id);
@@ -197,11 +181,12 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
   // 开始签到
   const handleStartCheckIn = async () => {
     if (!event) return;
-    
+
+    setActionError('');
     setIsStarting(true);
-    const result = await startCheckInSession(event.id, selectedDuration);
-    
-    if (result.success) {
+    try {
+      const result = await startCheckInSession(event.id, selectedDuration);
+      if (!result.success) throw new Error(result.error || 'start failed');
       setCheckInOpen(true);
       setShowStartModal(false);
       if (selectedDuration > 0) {
@@ -209,29 +194,27 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
       } else {
         setRemainingTime(null);
       }
+    } catch {
+      setActionError('开始签到失败，请稍后重试');
+    } finally {
+      setIsStarting(false);
     }
-    setIsStarting(false);
   };
 
   // 结束签到
   const handleEndCheckIn = async () => {
     if (!event) return;
-    
-    await endCheckInSession(event.id);
-    setCheckInOpen(false);
-    setRemainingTime(null);
-  };
 
-  // 格式化倒计时显示
-  const formatRemainingTime = (seconds: number): string => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    
-    if (hours > 0) {
-      return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    setActionError('');
+    try {
+      const success = await endCheckInSession(event.id);
+      if (!success) throw new Error('end failed');
+      setCheckInOpen(false);
+      setRemainingTime(null);
+      setShowEndConfirm(false);
+    } catch {
+      setActionError('结束签到失败，请稍后重试');
     }
-    return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
   // 更新统计数据
@@ -343,31 +326,33 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
   // 刷新数据
   const refreshData = async () => {
     if (!event) return;
-    
-    const checkIns = await getCheckInRecords(event.id, 50);
-    setRecords(checkIns);
-    
-    const count = await getCheckInCount(event.id);
-    const totalCount = await getParticipantCount(event.id);
-    
-    updateStats(checkIns, count, totalCount || undefined);
-  };
 
-  // 复制链接
-  const copyUrl = () => {
-    navigator.clipboard.writeText(getCheckInUrl());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setActionError('');
+    try {
+      const checkIns = await getCheckInRecords(event.id, 50);
+      const count = await getCheckInCount(event.id);
+      const totalCount = await getParticipantCount(event.id);
+      setRecords(checkIns);
+      setLatestRecord(checkIns[0] ?? null);
+      updateStats(checkIns, count, totalCount || undefined);
+    } catch {
+      setActionError('刷新失败，已保留当前数据');
+    }
   };
 
   // 全屏切换
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen();
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen();
-      setIsFullscreen(false);
+    setActionError('');
+    try {
+      if (!document.fullscreenElement) {
+        void document.documentElement.requestFullscreen();
+        setIsFullscreen(true);
+      } else {
+        void document.exitFullscreen();
+        setIsFullscreen(false);
+      }
+    } catch {
+      setActionError('当前浏览器无法进入全屏');
     }
   };
 
@@ -392,165 +377,41 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
   }));
 
   return (
-    <div className="relative min-h-screen w-full overflow-hidden font-sans text-white bg-[#0b0a1a]">
-      {/* 背景层 */}
-      <div className="absolute inset-0 z-0">
-        <div 
-          className="absolute top-[-20%] left-[-10%] w-[50vw] h-[50vw] rounded-full mix-blend-screen filter blur-[120px] opacity-30 animate-pulse"
-          style={{ backgroundColor: COLORS.primary }}
-        />
-        <div 
-          className="absolute bottom-[-20%] right-[-10%] w-[60vw] h-[60vw] rounded-full mix-blend-screen filter blur-[150px] opacity-25 animate-pulse"
-          style={{ backgroundColor: COLORS.secondary, animationDelay: '1s' }}
-        />
-        <div 
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[40vw] h-[40vw] rounded-full mix-blend-screen filter blur-[100px] opacity-20 animate-pulse"
-          style={{ backgroundColor: COLORS.success, animationDelay: '2s' }}
-        />
-        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-15" />
-        <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,41,0)_1px,transparent_1px),linear-gradient(90deg,rgba(18,16,41,0)_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_60%_at_50%_50%,#000_70%,transparent_100%)]" />
-      </div>
+    <div className="checkin-stage vip-ui admin-ui relative min-h-screen w-full overflow-hidden" data-ui-theme={appearance}>
+      <div className="checkin-stage-ambient is-blue" aria-hidden="true" />
+      <div className="checkin-stage-ambient is-violet" aria-hidden="true" />
+      <div className="checkin-stage-ambient is-magenta" aria-hidden="true" />
 
       {/* 主内容 */}
-      <div className="relative z-10 flex flex-col h-screen p-4 md:p-6 lg:p-8">
+      <div className="checkin-stage-shell relative z-10 flex min-h-screen flex-col">
         
-        {/* 顶部 Header */}
-        <header className="flex items-center justify-between mb-6 shrink-0">
-          {/* 左侧：返回按钮 + 标题 */}
-          <div className="flex items-center gap-4">
-            {onBack && (
-              <button
-                onClick={onBack}
-                className="p-2 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 transition-all"
-              >
-                <ArrowLeft size={20} />
-              </button>
-            )}
-            <div>
-              <h1 className="text-2xl md:text-4xl font-black tracking-wider flex items-center gap-3">
-                <Sparkles className="text-yellow-400" size={28} />
-                <span className="bg-clip-text text-transparent bg-gradient-to-r from-white via-white to-gray-400">
-                  {event?.name || settings?.eventName || '年度盛典'}
-                </span>
-                <span className="text-lg md:text-2xl text-[#b63cfa] font-medium opacity-80">
-                  / 签到大屏
-                </span>
-              </h1>
-              <p className="text-gray-500 text-sm mt-1 flex items-center gap-2">
-                <MapPin size={12} />
-                <span>实时签到动态展示</span>
-                <span className="text-green-400">● 已连接数据库</span>
-              </p>
-            </div>
-          </div>
+        <CheckInDisplayHeader
+          eventName={event?.name || settings?.eventName || '年度盛典'}
+          connected={Boolean(event)}
+          checkInOpen={checkInOpen}
+          remainingTime={remainingTime}
+          currentTime={currentTime}
+          soundEnabled={soundEnabled}
+          onBack={onBack}
+          onStart={() => setShowStartModal(true)}
+          onEnd={() => setShowEndConfirm(true)}
+          onRefresh={() => void refreshData()}
+          onToggleSound={() => setSoundEnabled(current => !current)}
+          onShowQr={() => setShowQRModal(true)}
+          onToggleFullscreen={toggleFullscreen}
+        />
 
-          {/* 右侧：签到状态 + 时间 + 控制按钮 */}
-          <div className="flex items-center gap-4">
-            {/* 签到状态和倒计时 */}
-            {checkInOpen ? (
-              <div className="flex items-center gap-3">
-                {/* 倒计时显示 */}
-                {remainingTime !== null && remainingTime > 0 ? (
-                  <div className={`flex items-center gap-2 px-4 py-2 rounded-xl border ${
-                    remainingTime <= 60 
-                      ? 'bg-red-500/20 border-red-500/30 text-red-400 animate-pulse' 
-                      : remainingTime <= 300 
-                        ? 'bg-orange-500/20 border-orange-500/30 text-orange-400'
-                        : 'bg-green-500/20 border-green-500/30 text-green-400'
-                  }`}>
-                    <Timer size={18} />
-                    <span className="font-mono text-lg font-bold">
-                      {formatRemainingTime(remainingTime)}
-                    </span>
-                    <span className="text-xs opacity-70">剩余</span>
-                  </div>
-                ) : remainingTime === null ? (
-                  <div className="flex items-center gap-2 px-4 py-2 bg-green-500/20 rounded-xl border border-green-500/30 text-green-400">
-                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                    <span className="font-medium">签到进行中</span>
-                  </div>
-                ) : null}
-                
-                {/* 结束签到按钮 */}
-                <button
-                  onClick={handleEndCheckIn}
-                  className="flex items-center gap-2 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 rounded-xl border border-red-500/30 text-red-400 transition-all"
-                  title="结束签到"
-                >
-                  <Square size={16} />
-                  <span className="hidden md:inline">结束签到</span>
-                </button>
-              </div>
-            ) : (
-              /* 签到未开启时显示"开始签到"按钮 */
-              <button
-                onClick={() => setShowStartModal(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 rounded-xl text-white font-bold shadow-lg shadow-green-500/30 transition-all hover:scale-105"
-                title="开始签到"
-              >
-                <Play size={18} />
-                <span>开始签到</span>
-              </button>
-            )}
-            
-            {/* 当前时间 */}
-            <div className="hidden md:flex items-center gap-2 bg-white/5 px-4 py-2 rounded-xl border border-white/10">
-              <Clock size={16} className="text-blue-400" />
-              <span className="font-mono text-lg">
-                {currentTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-              </span>
-            </div>
-
-            {/* 控制按钮组 */}
-            <div className="flex items-center gap-2">
-              {/* 刷新按钮 */}
-              <button
-                onClick={refreshData}
-                className="p-2.5 bg-green-500/20 hover:bg-green-500/30 rounded-xl border border-green-500/30 text-green-400 transition-all"
-                title="刷新数据"
-              >
-                <RefreshCw size={18} />
-              </button>
-              
-              {/* 声音开关 */}
-              <button
-                onClick={() => setSoundEnabled(!soundEnabled)}
-                className={`p-2.5 rounded-xl border transition-all ${
-                  soundEnabled 
-                    ? 'bg-blue-500/20 border-blue-500/30 text-blue-400' 
-                    : 'bg-white/5 border-white/10 text-gray-500'
-                }`}
-                title={soundEnabled ? '关闭提示音' : '开启提示音'}
-              >
-                {soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
-              </button>
-              
-              {/* 二维码显示 */}
-              <button
-                onClick={() => setShowQRModal(true)}
-                className="p-2.5 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 transition-all"
-                title="显示签到二维码"
-              >
-                <QrCode size={18} />
-              </button>
-              
-              {/* 全屏 */}
-              <button
-                onClick={toggleFullscreen}
-                className="p-2.5 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 transition-all"
-                title="全屏显示"
-              >
-                <Maximize size={18} />
-              </button>
-            </div>
-          </div>
-        </header>
+        {actionError && (
+          <p role="alert" className="checkin-action-error">
+            {actionError}
+          </p>
+        )}
 
         {/* 主体区域 */}
-        <div className="flex-1 flex gap-6 min-h-0">
+        <main className="checkin-stage-grid">
           
           {/* 左侧：实时动态 */}
-          <div className="flex-1 flex flex-col bg-white/5 backdrop-blur-xl rounded-3xl border border-white/10 p-6 overflow-hidden">
+          <div className="checkin-stage-panel checkin-live-panel">
             <RealtimeFeed 
               records={convertedRecords}
               maxDisplay={settings?.maxDisplayCount || 15}
@@ -558,8 +419,8 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
             />
           </div>
 
-          {/* 右侧：统计 + 最新签到 + 二维码 */}
-          <div className="w-96 flex flex-col gap-6 shrink-0">
+          {/* 右侧：统计 + 最新签到 */}
+          <aside className="checkin-stage-sidebar">
             
             {/* 统计信息 */}
             <CheckInStats 
@@ -572,138 +433,21 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
               variant="large"
             />
 
-            {/* 最新签到展示 - 头像网格 */}
-            <div className="bg-white/5 backdrop-blur-xl rounded-3xl border border-white/10 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <Sparkles size={18} className="text-yellow-400" />
-                  <h4 className="font-bold text-white">刚刚签到</h4>
-                </div>
-                {checkInQueue.length > 0 && (
-                  <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs rounded-full animate-pulse">
-                    +{checkInQueue.length} 待展示
-                  </span>
-                )}
-              </div>
-              
-              {/* 最新签到的大卡片 */}
-              {latestRecord && (
-                <div className={`mb-4 p-4 rounded-2xl bg-gradient-to-br from-green-500/20 to-emerald-600/10 border border-green-500/30 ${showLatestAnimation ? 'animate-pulse' : ''}`}>
-                  <div className="flex items-center gap-4">
-                    <img
-                      src={latestRecord.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${latestRecord.employee_id}`}
-                      alt={latestRecord.name}
-                      className={`w-16 h-16 rounded-2xl border-2 border-green-500/60 object-cover ${showLatestAnimation ? 'ring-4 ring-green-500/50 ring-offset-2 ring-offset-transparent' : ''}`}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-lg font-bold text-white truncate">{latestRecord.name}</p>
-                      <p className="text-sm text-green-400">{latestRecord.department || latestRecord.employee_id}</p>
-                      {showLatestAnimation && (
-                        <p className="text-xs text-yellow-400 mt-1 animate-bounce">{greeting}</p>
-                      )}
-                    </div>
-                    {showLatestAnimation && (
-                      <div className="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center animate-bounce">
-                        <Check size={20} className="text-white" />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-              
-              {/* 最近签到的头像网格 */}
-              {convertedRecords.length > 1 && (
-                <div className="grid grid-cols-4 gap-3">
-                  {convertedRecords.slice(1, 9).map((record, index) => (
-                    <div 
-                      key={record.id}
-                      className="text-center group"
-                      style={{ 
-                        animation: `fadeInUp 0.3s ease-out ${index * 50}ms forwards`,
-                        opacity: 0 
-                      }}
-                    >
-                      <img
-                        src={record.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${record.employeeId}`}
-                        alt={record.name}
-                        className="w-14 h-14 mx-auto rounded-xl border-2 border-white/20 object-cover group-hover:border-blue-500/50 transition-all group-hover:scale-110"
-                      />
-                      <p className="text-xs text-gray-400 mt-1 truncate">{record.name}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-              
-              {convertedRecords.length === 0 && (
-                <div className="text-center py-8 text-gray-500">
-                  <Users size={32} className="mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">等待签到...</p>
-                </div>
-              )}
-            </div>
-
-            {/* 签到二维码 - 真实二维码 */}
-            <div className="relative bg-gradient-to-br from-white/10 to-white/5 backdrop-blur-xl rounded-3xl border border-white/10 p-6 text-center group">
-              {/* 放大按钮 - 悬浮在右上角 */}
-              <button
-                onClick={() => setShowQRModal(true)}
-                className="absolute top-3 right-3 p-2 bg-white/10 hover:bg-white/20 rounded-xl border border-white/10 text-gray-400 hover:text-white transition-all opacity-0 group-hover:opacity-100 hover:scale-110"
-                title="放大二维码"
-              >
-                <Maximize size={16} />
-              </button>
-              
-              <div 
-                className="w-40 h-40 mx-auto bg-white rounded-2xl p-3 mb-4 shadow-lg cursor-pointer hover:scale-105 transition-transform"
-                onClick={() => setShowQRModal(true)}
-              >
-                <QRCodeSVG 
-                  value={getCheckInUrl()}
-                  size={136}
-                  level="H"
-                  includeMargin={false}
-                  bgColor="#FFFFFF"
-                  fgColor="#000000"
-                />
-              </div>
-              <p className="text-sm text-white font-bold">扫码签到</p>
-              <p className="text-xs text-gray-400 mt-1">使用微信扫描二维码</p>
-              
-              {/* 链接操作 */}
-              <div className="mt-3 flex items-center justify-center gap-2">
-                <button
-                  onClick={copyUrl}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-xs text-gray-300 transition-all"
-                >
-                  {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
-                  <span>{copied ? '已复制' : '复制链接'}</span>
-                </button>
-                <a
-                  href={getCheckInUrl()}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-xs text-gray-300 transition-all"
-                >
-                  <ExternalLink size={12} />
-                  <span>打开</span>
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>
+          </aside>
+        </main>
       </div>
 
       {/* 新签到弹出动画 */}
       {showLatestAnimation && latestRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
-          <div className="relative animate-bounceIn">
+        <div className="vip-modal-backdrop checkin-welcome-backdrop fixed inset-0 z-50 flex items-center justify-center animate-fadeIn">
+          <div className="checkin-welcome-wrap relative animate-bounceIn">
             {/* 背景光效 */}
-            <div className="absolute inset-0 bg-gradient-to-r from-green-500/30 via-emerald-500/20 to-teal-500/30 blur-3xl scale-150 animate-pulse" />
+            <div className="checkin-welcome-glow" />
             
             {/* 卡片 */}
-            <div className="relative bg-gradient-to-br from-green-500/20 via-emerald-600/15 to-teal-500/10 backdrop-blur-2xl border-2 border-green-500/40 rounded-[2rem] p-10 shadow-[0_0_80px_rgba(34,197,94,0.4)]">
+            <div className="checkin-welcome-card">
               {/* 顶部装饰 */}
-              <div className="absolute -top-6 left-1/2 -translate-x-1/2 flex items-center gap-2 px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-500 rounded-full text-sm font-bold shadow-xl">
+              <div className="checkin-welcome-badge">
                 <Sparkles size={16} />
                 <span>签到成功</span>
               </div>
@@ -714,23 +458,23 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
                   <img
                     src={latestRecord.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${latestRecord.employee_id}`}
                     alt={latestRecord.name}
-                    className="w-32 h-32 rounded-3xl border-4 border-green-500/60 object-cover shadow-2xl"
+                    className="checkin-welcome-avatar"
                   />
-                  <div className="absolute -bottom-3 -right-3 w-10 h-10 bg-green-500 rounded-full flex items-center justify-center shadow-lg animate-bounce">
-                    <Users size={20} className="text-white" />
+                  <div className="checkin-welcome-check animate-bounce">
+                    <Check size={20} />
                   </div>
                 </div>
               </div>
               
               {/* 信息 */}
               <div className="text-center">
-                <h2 className="text-4xl font-black text-white mb-2">{latestRecord.name}</h2>
-                <p className="text-xl text-green-400 font-medium">{latestRecord.department || '未知部门'}</p>
-                <p className="text-gray-400 mt-2">{latestRecord.employee_id}</p>
+                <h2 className="checkin-welcome-name">{latestRecord.name}</h2>
+                <p className="checkin-welcome-department">{latestRecord.department || '未知部门'}</p>
+                <p className="checkin-welcome-id">{latestRecord.employee_id}</p>
                 
                 {/* 祝福语 */}
-                <div className="mt-6 pt-6 border-t border-white/10">
-                  <p className="text-2xl text-yellow-400 font-bold animate-pulse">{greeting}</p>
+                <div className="checkin-welcome-message">
+                  <p>{greeting}</p>
                 </div>
               </div>
             </div>
@@ -738,108 +482,56 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
         </div>
       )}
 
-      {/* 二维码弹窗 - 极简全屏设计 */}
-      {showQRModal && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center animate-modalFadeIn cursor-pointer"
-          onClick={() => setShowQRModal(false)}
-        >
-          {/* 纯净深色背景 */}
-          <div className="absolute inset-0 bg-[#0a0a0f]" />
-          
-          {/* 微妙的背景光效 */}
-          <div className="absolute inset-0 overflow-hidden pointer-events-none">
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[120vh] h-[120vh] bg-gradient-radial from-blue-900/20 via-purple-900/10 to-transparent rounded-full blur-3xl" />
-          </div>
-          
-          {/* 顶部倒计时显示 */}
-          {checkInOpen && remainingTime !== null && remainingTime > 0 && (
-            <div className="absolute top-6 left-1/2 -translate-x-1/2 z-20">
-              <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl border backdrop-blur-xl ${
-                remainingTime <= 60 
-                  ? 'bg-red-500/30 border-red-500/50 text-red-300 animate-pulse' 
-                  : remainingTime <= 300 
-                    ? 'bg-orange-500/30 border-orange-500/50 text-orange-300'
-                    : 'bg-green-500/30 border-green-500/50 text-green-300'
-              }`}>
-                <Timer size={24} />
-                <span className="font-mono text-2xl font-bold">
-                  {formatRemainingTime(remainingTime)}
-                </span>
-                <span className="text-sm opacity-80">后结束签到</span>
-              </div>
+      <CheckInQrModal
+        open={showQRModal}
+        eventName={event?.name || settings?.eventName || '年度盛典'}
+        checkInUrl={getCheckInUrl()}
+        remainingLabel={checkInOpen && remainingTime !== null ? formatCheckInRemainingTime(remainingTime) : null}
+        onClose={() => setShowQRModal(false)}
+      />
+
+      {showEndConfirm && (
+        <div className="vip-modal-backdrop fixed inset-0 z-50 grid place-items-center p-4" role="presentation">
+          <section role="dialog" aria-modal="true" aria-label="确认结束签到" className="vip-modal ui-surface w-full max-w-sm rounded-3xl border p-7 text-center">
+            <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[var(--ui-danger-soft)] text-[var(--ui-danger)]">
+              <Check size={22} aria-hidden="true" />
             </div>
-          )}
-          
-          {/* 关闭按钮 - 右上角 */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowQRModal(false);
-            }}
-            className="absolute top-6 right-6 w-12 h-12 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center text-gray-400 hover:text-white transition-all duration-200 hover:scale-110 z-10"
-          >
-            <X size={24} />
-          </button>
-          
-          {/* 二维码容器 - 居中超大显示 */}
-          <div 
-            className="relative animate-modalSlideUp"
-            onClick={e => e.stopPropagation()}
-          >
-            {/* 外层柔和光晕 */}
-            <div className="absolute -inset-12 md:-inset-20 bg-gradient-to-br from-blue-500/20 via-purple-500/15 to-pink-500/10 rounded-[4rem] blur-3xl opacity-70" />
-            
-            {/* 二维码白色容器 */}
-            <div className="relative bg-white rounded-[2rem] md:rounded-[3rem] p-8 md:p-12 shadow-[0_0_150px_rgba(59,130,246,0.25)]">
-              <QRCodeSVG 
-                value={getCheckInUrl()}
-                size={Math.min(window.innerWidth * 0.7, window.innerHeight * 0.6, 560)}
-                level="H"
-                includeMargin={false}
-                bgColor="#FFFFFF"
-                fgColor="#000000"
-              />
+            <h2 className="mt-4 text-xl font-semibold text-[var(--ui-text)]">确认结束签到？</h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--ui-text-muted)]">结束后，新扫码用户将无法继续签到。已登记记录不会被删除。</p>
+            <div className="mt-6 grid grid-cols-2 gap-3">
+              <button type="button" onClick={() => setShowEndConfirm(false)} className="vip-button-secondary px-4 py-3 font-medium">继续签到</button>
+              <button type="button" onClick={() => void handleEndCheckIn()} className="rounded-xl bg-[var(--ui-danger)] px-4 py-3 font-medium text-white">确认结束</button>
             </div>
-          </div>
-          
-          {/* 底部简洁提示 */}
-          <div className="absolute bottom-8 left-0 right-0 text-center">
-            <p className="text-gray-500 text-lg">使用微信扫描二维码签到</p>
-            <p className="text-gray-600 text-sm mt-2">点击任意位置关闭</p>
-          </div>
+          </section>
         </div>
       )}
 
       {/* 开始签到弹窗 */}
       {showStartModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center animate-modalFadeIn">
+        <div className="vip-modal-backdrop fixed inset-0 z-50 flex items-center justify-center p-4 animate-modalFadeIn">
           {/* 背景遮罩 */}
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-xl" />
+          <div className="absolute inset-0" />
           
           {/* 弹窗内容 */}
           <div className="relative animate-modalSlideUp max-w-md w-full mx-4">
-            {/* 外层光效 */}
-            <div className="absolute -inset-1 bg-gradient-to-br from-blue-500/30 via-purple-500/20 to-pink-500/10 rounded-[2.5rem] blur-xl opacity-60" />
-            
             {/* 主卡片 */}
-            <div className="relative bg-gradient-to-br from-[#1c1c1e] via-[#2c2c2e] to-[#1c1c1e] rounded-[2rem] p-8 border border-white/10 shadow-2xl">
+            <div className="vip-modal relative p-8">
               {/* 图标 */}
               <div className="flex justify-center mb-6">
-                <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-3xl flex items-center justify-center shadow-lg shadow-blue-500/30">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#3b82f6] shadow-[0_12px_28px_rgba(59,130,246,.24)]">
                   <QrCode size={40} className="text-white" />
                 </div>
               </div>
               
               {/* 标题 */}
               <div className="text-center mb-8">
-                <h2 className="text-2xl font-bold text-white mb-2">签到管理</h2>
-                <p className="text-gray-400">{event?.name || '年度盛典'}</p>
+                <h2 className="mb-2 text-2xl font-semibold text-[var(--ui-text)]">签到管理</h2>
+                <p className="text-[var(--ui-text-muted)]">{event?.name || '年度盛典'}</p>
               </div>
               
               {/* 时长选择 */}
               <div className="mb-8">
-                <label className="block text-sm text-gray-400 mb-3">选择签到时长</label>
+                <label className="mb-3 block text-sm font-medium text-[var(--ui-text-secondary)]">选择签到时长</label>
                 <div className="grid grid-cols-3 gap-2">
                   {DURATION_OPTIONS.map(option => (
                     <button
@@ -847,8 +539,8 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
                       onClick={() => setSelectedDuration(option.value)}
                       className={`py-3 px-4 rounded-xl text-sm font-medium transition-all ${
                         selectedDuration === option.value
-                          ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/30'
-                          : 'bg-white/5 text-gray-300 hover:bg-white/10 border border-white/10'
+                          ? 'bg-[#3b82f6] text-white shadow-[0_6px_18px_rgba(59,130,246,.22)]'
+                          : 'border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] text-[var(--ui-text-secondary)] hover:brightness-95'
                       }`}
                     >
                       {option.label}
@@ -864,14 +556,14 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
                     setShowStartModal(false);
                     // 仅查看模式，不开始签到
                   }}
-                  className="flex-1 py-4 px-6 bg-white/10 hover:bg-white/15 rounded-xl text-white font-medium transition-all border border-white/10"
+                  className="vip-button-secondary flex-1 px-6 py-3 font-medium"
                 >
                   仅查看记录
                 </button>
                 <button
                   onClick={handleStartCheckIn}
                   disabled={isStarting}
-                  className="flex-1 flex items-center justify-center gap-2 py-4 px-6 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 rounded-xl text-white font-bold transition-all shadow-lg shadow-green-500/30 disabled:opacity-50"
+                  className="vip-button-primary flex flex-1 items-center justify-center gap-2 px-6 py-3 font-semibold disabled:opacity-50"
                 >
                   {isStarting ? (
                     <>
@@ -888,7 +580,7 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
               </div>
               
               {/* 提示 */}
-              <p className="text-center text-gray-500 text-xs mt-6">
+              <p className="mt-6 text-center text-xs text-[var(--ui-text-muted)]">
                 开始签到后，员工可扫描二维码进行签到
               </p>
             </div>

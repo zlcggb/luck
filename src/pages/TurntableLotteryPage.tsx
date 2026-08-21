@@ -174,7 +174,7 @@ export default function TurntableLotteryPage() {
 
   if (!eventId) {
     return (
-      <div className="h-screen flex items-center justify-center bg-[#FDFBF7] text-[#94a3b8]">
+      <div className="vip-ui h-screen flex items-center justify-center bg-[#FDFBF7] text-[#94a3b8]">
         <p>缺少活动 ID，请通过正确链接访问</p>
       </div>
     );
@@ -182,7 +182,7 @@ export default function TurntableLotteryPage() {
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-[#FDFBF7]">
+      <div className="vip-ui h-screen flex items-center justify-center bg-[#FDFBF7]">
         <div className="animate-spin w-8 h-8 border-2 border-[#003cff] border-t-transparent rounded-full" />
       </div>
     );
@@ -190,7 +190,7 @@ export default function TurntableLotteryPage() {
 
   return (
     <div
-      className="h-screen bg-[#FDFBF7] text-[#2c3e50] overflow-hidden relative"
+      className="vip-ui h-screen bg-[#FDFBF7] text-[#2c3e50] overflow-hidden relative"
       style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}
     >
       {/* 欧式古典暗纹背景 */}
@@ -868,7 +868,7 @@ function AdminApp({
   ];
 
   return (
-    <div className="h-screen flex flex-col bg-[#f8fafc] text-[#1e293b] overflow-hidden">
+    <div className="vip-ui h-screen flex flex-col bg-[#f8fafc] text-[#1e293b] overflow-hidden">
 
       {/* ── 顶部 Header ── */}
       <div className="shrink-0 flex items-center justify-between px-5 py-3 bg-white border-b border-[#e2e8f0]">
@@ -1694,7 +1694,7 @@ function AdminApp({
 
       {/* ── 核销确认弹窗（全局层级） ── */}
       {lookupWinner && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setLookupWinner(null)}>
+        <div className="vip-modal-backdrop fixed inset-0 z-[9999] flex items-center justify-center" onClick={() => setLookupWinner(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden animate-fade-in-up" onClick={e => e.stopPropagation()}>
             {/* 弹窗头部 */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-[#e2e8f0] bg-[#f8fafc]">

@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, type SyntheticEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
-  X, Upload, Download, FileSpreadsheet, Award, History, 
+  Upload, Download, FileSpreadsheet, Award, History,
   Trash2, Plus, Minus, RotateCcw, AlertCircle, QrCode, MapPin,
-  Sparkles, ChevronRight, Monitor, Settings2, FolderOpen, Loader2,
+  Sparkles, ChevronRight, Monitor, Settings2, Loader2,
   LogIn, Search, UserPlus, Eye, Palette
 } from 'lucide-react';
 import { Participant, Prize, DrawRecord, BackgroundMusicSettings, ThemeId, ThemePalette, AvatarThemeId } from '../types';
@@ -12,6 +12,13 @@ import { CheckInSettings, DEFAULT_CHECKIN_SETTINGS } from '../types/checkin';
 import { saveCheckInSettings, loadCheckInSettings, clearCheckInRecords, calculateStats } from '../utils/checkinStorage';
 import { useModal } from '../contexts/ModalContext';
 import { THEME_OPTIONS } from '../theme';
+import {
+  SettingsAccountActions,
+  SettingsPanelTitleBar,
+  SettingsSidebarHeader,
+} from './SettingsNavigationControls';
+import { useUiAppearance } from '../contexts/UiAppearanceContext';
+import { rememberLastProject, resolveLotteryDestination } from '../utils/mobileNavigation';
 import {
   AVATAR_THEME_OPTIONS,
   getAvatarFallbackUrlForParticipant,
@@ -101,6 +108,7 @@ const SettingsPanel = ({
   onToggleMusic,
 }: SettingsPanelProps) => {
   const navigate = useNavigate();
+  const { appearance } = useUiAppearance();
   const [activeTab, setActiveTab] = useState<TabType>('import');
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -152,7 +160,7 @@ const SettingsPanel = ({
       let availableProjects: LuckEvent[] = [];
       let preferredEventId: string | null = null;
 
-      // 策略1：已登录用户 - 获取用户关联的项目
+      // 策略1：已登录用户 - 获取用户关联的项目（仅保留轮动式项目）
       if (user) {
         const luckUser = await getOrCreateUser({
           id: user.id,
@@ -160,7 +168,8 @@ const SettingsPanel = ({
           name: user.user_metadata?.name
         });
         if (luckUser) {
-          availableProjects = await getUserProjects(luckUser.id);
+          const allProjects = await getUserProjects(luckUser.id);
+          availableProjects = allProjects.filter(p => (p as any).mode === 'rolling');
         }
       }
       
@@ -189,10 +198,10 @@ const SettingsPanel = ({
         }
       }
       
-      // 策略4：未登录或无项目时，获取全局活跃活动
+      // 策略4：未登录或无项目时，获取全局活跃活动（仅限轮动式）
       if (availableProjects.length === 0) {
         const activeEvent = await getActiveEvent();
-        if (activeEvent) {
+        if (activeEvent && (activeEvent as any).mode === 'rolling') {
           availableProjects.push(activeEvent);
           // 如果没有首选活动，使用全局活跃活动
           if (!preferredEventId) {
@@ -220,6 +229,7 @@ const SettingsPanel = ({
         setSelectedProjectId(finalSelectedId);
         // 持久化到 LocalStorage
         localStorage.setItem(LAST_EVENT_KEY, finalSelectedId);
+        rememberLastProject(finalSelectedId);
         // 仅当与父组件的 currentEventId 不同时才通知导航（避免循环跳转）
         if (finalSelectedId !== currentEventId) {
           onEventChange?.(finalSelectedId);
@@ -252,10 +262,14 @@ const SettingsPanel = ({
           name: user.user_metadata?.name
         });
         if (luckUser) {
-          const newProject = await createProject(luckUser.id, { name: newProjectName.trim() });
+          const newProject = await createProject(luckUser.id, { 
+            name: newProjectName.trim(),
+            mode: 'rolling'
+          });
           if (newProject) {
             setProjects(prev => [...prev, newProject]);
             setSelectedProjectId(newProject.id);
+            rememberLastProject(newProject.id);
             onEventChange?.(newProject.id);
             showSuccess('项目创建成功！');
             setNewProjectName('');
@@ -303,6 +317,7 @@ const SettingsPanel = ({
     onEventChange?.(projectId);
     // 持久化到 LocalStorage，下次访问时自动关联
     localStorage.setItem(LAST_EVENT_KEY, projectId);
+    rememberLastProject(projectId);
     console.log('📌 已切换并保存活动:', projectId);
   };
 
@@ -767,21 +782,38 @@ const SettingsPanel = ({
 
   if (!isOpen) return null;
 
+  const navigateFromSettings = (destination: string) => {
+    onClose();
+    navigate(destination);
+  };
+
+  const handleLogout = async () => {
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      setCurrentUser(null);
+      setProjects([]);
+      setSelectedProjectId(null);
+      onClose();
+      navigate('/login', { replace: true });
+    } catch (error) {
+      console.error('Logout error', error);
+      showError('退出失败，请稍后重试');
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex">
+    <div className="vip-ui admin-ui fixed inset-0 z-50 flex" data-ui-theme={appearance}>
       {/* 遮罩层 */}
       <div 
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="vip-modal-backdrop absolute inset-0"
         onClick={onClose}
       />
       
       {/* 左侧项目管理面板 */}
-      <div className="relative w-64 h-full bg-[#0a0820]/95 backdrop-blur-xl border-r border-white/10 flex flex-col animate-slide-in-left z-10">
+      <div className="vip-glass relative hidden sm:flex w-64 h-full border-r flex-col animate-slide-in-left z-10">
         <div className="p-4 border-b border-white/10">
-          <div className="flex items-center gap-2 text-white font-bold text-lg">
-            <FolderOpen size={20} className="text-[#b63cfa]" />
-            项目管理
-          </div>
+          <SettingsSidebarHeader onOpenProjects={() => navigateFromSettings('/projects')} />
         </div>
         
         {/* 项目列表 */}
@@ -809,7 +841,7 @@ const SettingsPanel = ({
             </div>
           ) : projects.length === 0 ? (
             <div className="text-center py-8 text-gray-500 text-sm">
-              暂无项目，请创建一个
+              暂无轮动项目，请创建一个
             </div>
           ) : (
             projects.map(project => (
@@ -817,7 +849,7 @@ const SettingsPanel = ({
                 key={project.id}
                 className={`group relative p-3 rounded-xl cursor-pointer transition-all ${
                   selectedProjectId === project.id
-                    ? 'bg-gradient-to-r from-[#3c80fa]/20 to-[#b63cfa]/20 border border-[#3c80fa]/50'
+                    ? 'bg-blue-50 border border-blue-300'
                     : 'bg-white/5 hover:bg-white/10 border border-transparent'
                 }`}
                 onClick={() => handleSelectProject(project.id)}
@@ -857,7 +889,7 @@ const SettingsPanel = ({
                   type="text"
                   value={newProjectName}
                   onChange={(e) => setNewProjectName(e.target.value)}
-                  placeholder="项目名称"
+                  placeholder="轮动项目名称"
                   className="w-full px-3 py-2 bg-black/40 border border-white/20 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-[#3c80fa]"
                   autoFocus
                   onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
@@ -884,63 +916,27 @@ const SettingsPanel = ({
                 className="w-full py-2.5 border-2 border-dashed border-white/20 text-gray-400 text-sm rounded-xl hover:border-[#3c80fa] hover:text-[#3c80fa] transition-colors flex items-center justify-center gap-2"
               >
                 <Plus size={16} />
-                新建项目
+                新建轮动项目
               </button>
             )}
 
-            {/* 用户信息 & 退出 */}
-            <div className="flex items-center justify-between px-1 pt-2 border-t border-white/5">
-              <div className="flex items-center gap-2 overflow-hidden">
-                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-[10px] font-bold text-white shrink-0">
-                  {currentUser.email?.charAt(0).toUpperCase()}
-                </div>
-                <div className="flex flex-col min-w-0">
-                  <span className="text-xs text-white font-medium truncate max-w-[100px]">{currentUser.user_metadata?.name || currentUser.email?.split('@')[0]}</span>
-                </div>
-              </div>
-              <button
-                onClick={async () => {
-                  try {
-                    await supabase.auth.signOut();
-                    setCurrentUser(null);
-                    setProjects([]);
-                    setSelectedProjectId(null);
-                    showSuccess('已退出登录');
-                  } catch (e) {
-                    console.error('Logout error', e);
-                  }
-                }}
-                className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"
-                title="退出登录"
-              >
-                <LogIn size={16} className="rotate-180" />
-              </button>
-            </div>
+            <SettingsAccountActions
+              displayName={currentUser.user_metadata?.name || currentUser.email?.split('@')[0] || '管理员'}
+              email={currentUser.email}
+              onOpenProfile={() => navigateFromSettings('/profile')}
+              onLogout={() => void handleLogout()}
+            />
           </div>
         )}
       </div>
       
       {/* 右侧设置面板 */}
-      <div className="relative ml-auto w-full max-w-3xl h-full bg-[#0f0c29]/95 backdrop-blur-xl border-l border-white/10 shadow-2xl flex flex-col animate-slide-in-right">
-        {/* 头部 */}
-        <div className="flex items-center justify-between p-4 border-b border-white/10">
-          <h2 className="text-xl font-bold text-white">设置</h2>
-          <div className="flex items-center gap-2">
-            <button 
-              onClick={() => setShowResetConfirm(true)}
-              className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg text-red-400 text-sm font-medium transition-colors flex items-center gap-1.5"
-            >
-              <RotateCcw size={14} />
-              重置数据
-            </button>
-            <button 
-              onClick={onClose}
-              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-            >
-              <X size={20} className="text-gray-400" />
-            </button>
-          </div>
-        </div>
+      <div className="vip-modal relative ml-auto w-full max-w-3xl h-full !rounded-none md:!rounded-l-[24px] flex flex-col animate-slide-in-right">
+        <SettingsPanelTitleBar
+          onReturnWorkspace={() => navigateFromSettings(resolveLotteryDestination(selectedProjectId || currentEventId))}
+          onReset={() => setShowResetConfirm(true)}
+          onClose={onClose}
+        />
 
         {/* 当前项目提示 */}
         {selectedProjectId && (
@@ -1126,7 +1122,7 @@ const SettingsPanel = ({
                     <div className="space-y-2">
                       <label className="text-xs text-gray-400">预设音乐</label>
                       <select
-                        value={backgroundMusic.presetId}
+                        value={backgroundMusic?.presetId || 'default'}
                         onChange={(e) => handleBackgroundMusicPresetChange(e.target.value)}
                         className="w-full bg-black/40 border border-white/20 rounded px-2 py-2 text-white text-sm focus:border-[#3c80fa] outline-none"
                       >
@@ -1623,10 +1619,10 @@ const SettingsPanel = ({
                     onClose();
                     onOpenCheckInDisplay();
                   }}
-                  className="w-full flex items-center justify-between px-5 py-5 bg-gradient-to-r from-green-500/20 via-emerald-600/15 to-teal-500/10 rounded-2xl border border-green-500/30 hover:border-green-500/50 transition-all group shadow-lg"
+                  className="vip-card vip-card-interactive w-full flex items-center justify-between px-5 py-5 text-left group"
                 >
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center shadow-lg">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#3b82f6] shadow-[0_8px_20px_rgba(59,130,246,.22)]">
                       <Monitor size={24} className="text-white" />
                     </div>
                     <div className="text-left">
@@ -1634,13 +1630,13 @@ const SettingsPanel = ({
                       <span className="text-gray-400 text-sm">实时展示签到动态</span>
                     </div>
                   </div>
-                  <ChevronRight size={24} className="text-green-400 group-hover:translate-x-1 transition-transform" />
+                  <ChevronRight size={24} className="text-[#3b82f6] group-hover:translate-x-1 transition-transform" />
                 </button>
               )}
 
               <div className="p-4 bg-white/5 rounded-xl border border-white/10">
                 <div className="flex items-center gap-2 mb-3">
-                  <QrCode size={18} className="text-green-400" />
+                  <QrCode size={18} className="text-[#3b82f6]" />
                   <span className="font-medium text-white">签到统计</span>
                 </div>
                 <div className="grid grid-cols-3 gap-4">
@@ -1649,7 +1645,7 @@ const SettingsPanel = ({
                     <p className="text-xs text-gray-500">总人数</p>
                   </div>
                   <div className="text-center">
-                    <p className="text-2xl font-bold text-green-400">{checkInStats.checkedInCount}</p>
+                    <p className="text-2xl font-bold text-[#3b82f6]">{checkInStats.checkedInCount}</p>
                     <p className="text-xs text-gray-500">已签到</p>
                   </div>
                   <div className="text-center">
@@ -1667,7 +1663,7 @@ const SettingsPanel = ({
 
               <div className="p-4 bg-white/5 rounded-xl border border-white/10 space-y-3">
                 <div className="flex items-center gap-2">
-                  <Sparkles size={16} className="text-yellow-400" />
+                  <Sparkles size={16} className="text-[#3b82f6]" />
                   <span className="font-medium text-white text-sm">活动配置</span>
                 </div>
                 <div>
@@ -1676,7 +1672,7 @@ const SettingsPanel = ({
                     type="text"
                     value={checkInSettings.eventName}
                     onChange={(e) => updateCheckInSettings({ eventName: e.target.value })}
-                    className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500/50"
+                    className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500/50"
                     placeholder="例如：2026年度盛典"
                   />
                 </div>
@@ -1686,7 +1682,7 @@ const SettingsPanel = ({
                     type="date"
                     value={checkInSettings.eventDate}
                     onChange={(e) => updateCheckInSettings({ eventDate: e.target.value })}
-                    className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-green-500/50"
+                    className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500/50"
                   />
                 </div>
               </div>
@@ -1700,7 +1696,7 @@ const SettingsPanel = ({
                   <button
                     onClick={() => updateCheckInSettings({ requireLocation: !checkInSettings.requireLocation })}
                     className={`w-10 h-5 rounded-full transition-colors ${
-                      checkInSettings.requireLocation ? 'bg-green-500' : 'bg-gray-600'
+                      checkInSettings.requireLocation ? 'bg-blue-500' : 'bg-gray-600'
                     }`}
                   >
                     <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${
@@ -1718,7 +1714,7 @@ const SettingsPanel = ({
                       type="text"
                       value={checkInSettings.locationName || ''}
                       onChange={(e) => updateCheckInSettings({ locationName: e.target.value })}
-                      className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500/50"
+                      className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500/50"
                       placeholder="活动地点名称"
                     />
                     <div className="grid grid-cols-2 gap-2">
@@ -1727,7 +1723,7 @@ const SettingsPanel = ({
                         step="0.000001"
                         value={checkInSettings.locationLat || ''}
                         onChange={(e) => updateCheckInSettings({ locationLat: parseFloat(e.target.value) || undefined })}
-                        className="px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500/50"
+                        className="px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500/50"
                         placeholder="纬度"
                       />
                       <input
@@ -1735,7 +1731,7 @@ const SettingsPanel = ({
                         step="0.000001"
                         value={checkInSettings.locationLng || ''}
                         onChange={(e) => updateCheckInSettings({ locationLng: parseFloat(e.target.value) || undefined })}
-                        className="px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500/50"
+                        className="px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500/50"
                         placeholder="经度"
                       />
                     </div>
@@ -1764,7 +1760,7 @@ const SettingsPanel = ({
 
               <div className="p-4 bg-white/5 rounded-xl border border-white/10 space-y-3">
                 <div className="flex items-center gap-2">
-                  <Settings2 size={16} className="text-purple-400" />
+                  <Settings2 size={16} className="text-[#3b82f6]" />
                   <span className="font-medium text-white text-sm">大屏配置</span>
                 </div>
                 
@@ -1773,7 +1769,7 @@ const SettingsPanel = ({
                   <button
                     onClick={() => updateCheckInSettings({ showQRCode: !checkInSettings.showQRCode })}
                     className={`w-10 h-5 rounded-full transition-colors ${
-                      checkInSettings.showQRCode ? 'bg-green-500' : 'bg-gray-600'
+                      checkInSettings.showQRCode ? 'bg-blue-500' : 'bg-gray-600'
                     }`}
                   >
                     <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${
@@ -1787,7 +1783,7 @@ const SettingsPanel = ({
                   <button
                     onClick={() => updateCheckInSettings({ showDepartmentStats: !checkInSettings.showDepartmentStats })}
                     className={`w-10 h-5 rounded-full transition-colors ${
-                      checkInSettings.showDepartmentStats ? 'bg-green-500' : 'bg-gray-600'
+                      checkInSettings.showDepartmentStats ? 'bg-blue-500' : 'bg-gray-600'
                     }`}
                   >
                     <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${
@@ -1805,7 +1801,7 @@ const SettingsPanel = ({
                         onClick={() => updateCheckInSettings({ animationStyle: style })}
                         className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                           checkInSettings.animationStyle === style
-                            ? 'bg-purple-500/20 border-purple-500/50 text-purple-400 border'
+                            ? 'bg-blue-50 border-blue-300 text-blue-700 border'
                             : 'bg-white/5 border-white/10 text-gray-400 border hover:bg-white/10'
                         }`}
                       >
@@ -1910,13 +1906,13 @@ const SettingsPanel = ({
 
       {/* 重置确认弹窗 */}
       {showResetConfirm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+        <div className="vip-ui fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div 
-            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            className="vip-modal-backdrop absolute inset-0"
             onClick={() => setShowResetConfirm(false)}
           />
           
-          <div className="relative bg-gradient-to-br from-[#1a1535] to-[#0f0c29] border border-white/10 rounded-2xl shadow-2xl max-w-sm w-full p-6 animate-fade-in">
+          <div className="vip-modal relative max-w-sm w-full p-6 animate-fade-in">
             <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/20 flex items-center justify-center">
               <AlertCircle size={32} className="text-red-400" />
             </div>

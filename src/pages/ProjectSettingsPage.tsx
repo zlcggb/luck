@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type CSSProperties } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -10,7 +10,14 @@ import {
   X,
   Copy,
   Download,
-  Check
+  Check,
+  QrCode,
+  UsersRound,
+  Gift,
+  CalendarDays,
+  SlidersHorizontal,
+  MonitorUp,
+  UserCheck
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
@@ -39,8 +46,11 @@ import {
   getBackgroundMusicFromSettings,
   saveProjectSettings,
 } from '../utils/projectSettings';
-import { DEFAULT_CUSTOM_THEME, DEFAULT_THEME_ID, getThemeById, paletteToCssVariables } from '../theme';
+import { DEFAULT_CUSTOM_THEME, DEFAULT_THEME_ID } from '../theme';
 import { DEFAULT_AVATAR_THEME_ID } from '../avatarTheme';
+import MobileBottomNav from '../components/navigation/MobileBottomNav';
+import { useUiAppearance } from '../contexts/UiAppearanceContext';
+import { rememberLastProject } from '../utils/mobileNavigation';
 
 /**
  * 项目设置页面 - 嵌入原有设置面板
@@ -48,6 +58,7 @@ import { DEFAULT_AVATAR_THEME_ID } from '../avatarTheme';
 const ProjectSettingsPage = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const { appearance } = useUiAppearance();
   
   const [loading, setLoading] = useState(true);
   const [project, setProject] = useState<LuckEvent | null>(null);
@@ -119,6 +130,7 @@ const ProjectSettingsPage = () => {
         return;
       }
       setProject(projectData);
+      rememberLastProject(projectId);
       
       // 从数据库 settings 字段加载项目级配置
       const dbSettings = await loadProjectSettings(projectId);
@@ -284,14 +296,9 @@ const ProjectSettingsPage = () => {
     saveRecords([]);
   };
 
-  const activePalette = themeId === 'custom'
-    ? customThemePalette
-    : getThemeById(themeId).palette;
-  const themeStyle = paletteToCssVariables(activePalette) as unknown as CSSProperties;
-
   if (loading) {
     return (
-      <div data-theme={themeId} style={themeStyle} className="min-h-screen bg-[var(--color-bg-base)] flex items-center justify-center">
+      <div className="vip-ui admin-ui flex min-h-screen items-center justify-center" data-ui-theme={appearance}>
         <Loader2 className="w-12 h-12 text-blue-500 animate-spin" />
       </div>
     );
@@ -299,7 +306,7 @@ const ProjectSettingsPage = () => {
 
   if (!project) {
     return (
-      <div data-theme={themeId} style={themeStyle} className="min-h-screen bg-[var(--color-bg-base)] flex flex-col items-center justify-center text-white">
+      <div className="vip-ui admin-ui flex min-h-screen flex-col items-center justify-center" data-ui-theme={appearance}>
         <p className="text-xl mb-4">项目不存在</p>
         <button onClick={() => navigate('/projects')} className="text-blue-400 hover:underline">
           返回项目列表
@@ -309,7 +316,7 @@ const ProjectSettingsPage = () => {
   }
 
   return (
-    <div data-theme={themeId} style={themeStyle} className="min-h-screen bg-[var(--color-bg-base)] text-white">
+    <div className="vip-ui admin-ui min-h-screen" data-ui-theme={appearance}>
       <audio
         ref={audioRef}
         src={backgroundMusic.src || undefined}
@@ -319,20 +326,15 @@ const ProjectSettingsPage = () => {
         onPlay={() => setIsMusicPlaying(true)}
         onPause={() => setIsMusicPlaying(false)}
       />
-      {/* 沉浸式背景 */}
-      <div className="fixed inset-0 z-0">
-        <div className="absolute top-[-20%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-blue-600/20 filter blur-[120px]" />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[60vw] h-[60vw] rounded-full bg-purple-600/15 filter blur-[150px]" />
-        <div className="absolute inset-0 bg-black/40 apple-gradient-mask" />
-      </div>
-
       {/* Header */}
-      <header className="relative z-10 border-b border-white/10 bg-black/30 backdrop-blur-xl">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+      <header className="vip-glass sticky top-0 z-30 border-b">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-3 sm:px-8">
           <div className="flex items-center gap-4">
             <button
               onClick={() => navigate('/projects')}
-              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+              aria-label="返回项目列表"
+              title="返回项目列表"
+              className="vip-icon-button grid w-11 place-items-center transition-colors"
             >
               <ArrowLeft size={20} />
             </button>
@@ -342,8 +344,8 @@ const ProjectSettingsPage = () => {
                 {project.name}
                 <span className={`ml-2 px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase ${
                   (project as any).mode === 'rolling'
-                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                    : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                    : 'bg-blue-50 text-blue-700 border border-blue-200'
                 }`}>
                   {(project as any).mode === 'rolling' ? '轮动式' : '转盘式'}
                 </span>
@@ -354,27 +356,33 @@ const ProjectSettingsPage = () => {
             </div>
           </div>
           
-          <div className="flex items-center gap-3">
+          <div className="hidden items-center gap-3 sm:flex">
             {(project as any).mode === 'rolling' ? (
               /* 轮动式顶部按钮 */
               <>
                 <button
                   onClick={() => setSettingsPanelOpen(true)}
-                  className="flex items-center gap-2 px-5 py-2.5 apple-glass hover:bg-white/10 rounded-2xl transition-all text-sm font-semibold tracking-wide"
+                  aria-label="打开项目设置"
+                  title="打开项目设置"
+                  className="vip-button-secondary flex items-center gap-2 px-5 py-2.5 text-sm font-semibold tracking-wide"
                 >
                   <Settings size={18} />
                   <span className="hidden sm:inline">设置</span>
                 </button>
                 <button
                   onClick={() => window.open(`/lottery?event=${projectId}&mode=admin`, '_blank')}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-white text-black rounded-2xl font-bold tracking-wide hover:shadow-[0_4px_30px_rgba(255,255,255,0.4)] transition-all active:scale-[0.98]"
+                  aria-label="打开大屏开奖"
+                  title="打开大屏开奖"
+                  className="vip-button-primary flex items-center gap-2 px-5 py-2.5 font-bold tracking-wide"
                 >
                   <Play size={18} />
                   <span className="hidden sm:inline">大屏开奖</span>
                 </button>
                 <button
                   onClick={() => window.open(`/display?event=${projectId}`, '_blank')}
-                  className="flex items-center gap-2 px-5 py-2.5 apple-glass hover:bg-white/10 rounded-2xl font-semibold tracking-wide transition-all active:scale-[0.98]"
+                  aria-label="打开签到一览"
+                  title="打开签到一览"
+                  className="vip-button-secondary flex items-center gap-2 px-5 py-2.5 font-semibold tracking-wide"
                 >
                   <Eye size={18} />
                   <span className="hidden sm:inline">签到一览</span>
@@ -385,14 +393,18 @@ const ProjectSettingsPage = () => {
               <>
                 <button
                   onClick={() => window.open(`/lottery/wheel?event=${projectId}`, '_blank')}
-                  className="flex items-center gap-2 px-5 py-2.5 apple-glass hover:bg-white/10 rounded-2xl transition-all text-sm font-semibold tracking-wide"
+                  aria-label="预览转盘抽奖"
+                  title="预览转盘抽奖"
+                  className="vip-button-secondary flex items-center gap-2 px-5 py-2.5 text-sm font-semibold tracking-wide"
                 >
                   <Eye size={18} />
                   <span className="hidden sm:inline">预览抽奖</span>
                 </button>
                 <button
                   onClick={() => window.open(`/lottery/wheel/admin?event=${projectId}&mode=admin`, '_blank')}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-white text-black rounded-2xl font-bold tracking-wide hover:shadow-[0_4px_30px_rgba(255,255,255,0.4)] transition-all active:scale-[0.98]"
+                  aria-label="打开转盘管理后台"
+                  title="打开转盘管理后台"
+                  className="vip-button-primary flex items-center gap-2 px-5 py-2.5 font-bold tracking-wide"
                 >
                   <Play size={18} />
                   <span className="hidden sm:inline">管理后台</span>
@@ -404,96 +416,109 @@ const ProjectSettingsPage = () => {
       </header>
 
       {/* 主内容 */}
-      <main className="relative z-10 max-w-7xl mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <main className="relative z-10 mx-auto max-w-6xl px-5 py-8 pb-28 sm:px-8 sm:pb-16">
+        <div className="mb-6">
+          <p className="text-sm font-medium text-[#2563eb]">项目工作台</p>
+          <h2 className="mt-1 text-2xl font-semibold text-[#111827]">概览与快捷操作</h2>
+          <p className="mt-2 text-sm text-[#6b7280]">管理活动配置、签到数据和开奖入口。</p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_.8fr_.8fr]">
           {/* 项目信息卡片 */}
-          <div className="apple-glass rounded-[32px] p-8 flex flex-col justify-between">
-            <h3 className="text-lg font-bold mb-6 tracking-tight">项目信息</h3>
-            <div className="space-y-4 text-[15px]">
+          <div className="vip-card flex flex-col justify-between p-6">
+            <div className="mb-5 flex items-center gap-3">
+              <span className="grid h-10 w-10 place-items-center rounded-xl bg-[#eff6ff] text-[#2563eb]"><CalendarDays size={19} /></span>
+              <div><h3 className="text-base font-semibold">项目信息</h3><p className="mt-0.5 text-xs text-[#6b7280]">基础活动资料</p></div>
+            </div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-4 text-[15px]">
               <div>
-                <p className="text-white/40 text-[11px] font-bold tracking-widest uppercase mb-1">PROJECT NAME</p>
-                <p className="text-white font-semibold">{project.name}</p>
+                <p className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-[#6b7280]">项目名称</p>
+                <p className="font-semibold text-[#111827]">{project.name}</p>
               </div>
               <div>
-                <p className="text-white/40 text-[11px] font-bold tracking-widest uppercase mb-1">EVENT DATE</p>
-                <p className="text-white font-semibold">{new Date(project.event_date).toLocaleDateString('zh-CN')}</p>
+                <p className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-[#6b7280]">活动日期</p>
+                <p className="font-semibold text-[#111827]">{new Date(project.event_date).toLocaleDateString('zh-CN')}</p>
               </div>
               <div>
-                <p className="text-white/40 text-[11px] font-bold tracking-widest uppercase mb-1">MODE</p>
+                <p className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-[#6b7280]">抽奖模式</p>
                 <span className={`inline-block px-3 py-1 rounded-full text-[11px] font-bold tracking-wider uppercase ${
                   (project as any).mode === 'rolling'
-                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                    : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                    : 'bg-blue-50 text-blue-700 border border-blue-200'
                 }`}>
-                  {(project as any).mode === 'rolling' ? 'ROLLING' : 'WHEEL'}
+                  {(project as any).mode === 'rolling' ? '轮动式' : '转盘式'}
                 </span>
               </div>
               <div>
-                <p className="text-white/40 text-[11px] font-bold tracking-widest uppercase mb-1">STATUS</p>
+                <p className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-[#6b7280]">项目状态</p>
                 <span className={`inline-block px-3 py-1 rounded-full text-[11px] font-bold tracking-wider uppercase ${
-                  project.status === 'active' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
-                  project.status === 'completed' ? 'bg-white/10 text-white/60 border border-white/20' :
-                  'bg-white/10 text-white/60 border border-white/20'
+                  project.status === 'active' ? 'bg-green-50 text-green-700 border border-green-200' :
+                  project.status === 'completed' ? 'bg-gray-100 text-gray-600 border border-gray-200' :
+                  'bg-gray-100 text-gray-600 border border-gray-200'
                 }`}>
-                  {project.status === 'active' ? 'ACTIVE' : project.status === 'completed' ? 'COMPLETED' : 'DRAFT'}
+                  {project.status === 'active' ? '进行中' : project.status === 'completed' ? '已完成' : '草稿'}
                 </span>
               </div>
             </div>
           </div>
 
           {/* 参与者统计 */}
-          <div className="apple-glass rounded-[32px] p-8 flex flex-col items-center justify-center text-center">
-            <h3 className="text-white/40 text-[11px] font-bold tracking-widest uppercase mb-6 drop-shadow-sm">TOTAL PARTICIPANTS</h3>
-            <p className="text-6xl font-black bg-clip-text text-transparent bg-gradient-to-b from-blue-400 to-indigo-500 mb-2 drop-shadow-[0_0_20px_rgba(96,165,250,0.4)]">
+          <div className="vip-card flex min-h-44 flex-col justify-between p-6">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-[#ecfdf5] text-[#059669]"><UsersRound size={19} /></span>
+            <p className="tabular-nums mt-5 text-4xl font-semibold text-[#111827]">
               {participants.length}
             </p>
-            <p className="text-white/50 text-sm font-semibold tracking-wide mt-2">已登记数据</p>
+            <p className="mt-1 text-sm text-[#6b7280]">已登记参与者</p>
           </div>
 
           {/* 奖项统计 */}
-          <div className="apple-glass rounded-[32px] p-8 flex flex-col items-center justify-center text-center">
-            <h3 className="text-white/40 text-[11px] font-bold tracking-widest uppercase mb-6 drop-shadow-sm">PRIZE TIERS</h3>
-            <p className="text-6xl font-black bg-clip-text text-transparent bg-gradient-to-b from-purple-400 to-pink-500 mb-2 drop-shadow-[0_0_20px_rgba(192,132,252,0.4)]">
+          <div className="vip-card flex min-h-44 flex-col justify-between p-6">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-[#fff7ed] text-[#ea580c]"><Gift size={19} /></span>
+            <p className="tabular-nums mt-5 text-4xl font-semibold text-[#111827]">
               {prizes.length}
             </p>
-            <p className="text-white/50 text-sm font-semibold tracking-wide mt-2">设定的奖项数</p>
+            <p className="mt-1 text-sm text-[#6b7280]">已配置奖项</p>
           </div>
         </div>
 
         {/* 快速操作 — 严格按模式分离 */}
-        <div className="mt-8 apple-glass rounded-[32px] p-8">
-          <h3 className="text-lg font-bold mb-6 tracking-tight">操作导航</h3>
+        <div className="vip-card mt-6 p-6 sm:p-8">
+          <div className="mb-6"><h3 className="text-lg font-semibold">操作导航</h3><p className="mt-1 text-sm text-[#6b7280]">选择一项任务继续管理当前项目。</p></div>
           
           {(project as any).mode === 'rolling' ? (
             /* ── 轮动式操作面板 ── */
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
               <button
                 onClick={() => setSettingsPanelOpen(true)}
-                className="p-6 apple-glass hover:bg-white/10 rounded-3xl transition-all text-left group"
+                className="vip-card vip-card-interactive p-6 text-left group"
               >
-                <p className="font-bold text-[17px] mb-2 group-hover:text-blue-400 transition-colors">展会设置</p>
-                <p className="text-xs text-white/50 tracking-wide leading-relaxed">配置活动参数、参与者名单与主题风格</p>
+                <span className="mb-4 grid h-10 w-10 place-items-center rounded-xl bg-[#eff6ff] text-[#2563eb]"><SlidersHorizontal size={19} /></span>
+                <p className="mb-2 font-semibold text-[16px]">展会设置</p>
+                <p className="text-sm leading-relaxed text-[#6b7280]">配置活动参数、参与者名单与舞台主题</p>
               </button>
               <button
                 onClick={() => setSettingsPanelOpen(true)}
-                className="p-6 apple-glass hover:bg-white/10 rounded-3xl transition-all text-left group"
+                className="vip-card vip-card-interactive p-6 text-left group"
               >
-                <p className="font-bold text-[17px] mb-2 group-hover:text-blue-400 transition-colors">配置奖项</p>
-                <p className="text-xs text-white/50 tracking-wide leading-relaxed">管理并控制所有奖品库存状态</p>
+                <span className="mb-4 grid h-10 w-10 place-items-center rounded-xl bg-[#fff7ed] text-[#ea580c]"><Gift size={19} /></span>
+                <p className="mb-2 font-semibold text-[16px]">配置奖项</p>
+                <p className="text-sm leading-relaxed text-[#6b7280]">管理奖品层级、数量与库存状态</p>
               </button>
               <button
                 onClick={() => window.open(`/lottery?event=${projectId}&mode=admin`, '_blank')}
-                className="p-6 bg-white hover:bg-gray-100 rounded-3xl border border-white/10 transition-all text-left group shadow-[0_4px_30px_rgba(255,255,255,0.25)]"
+                className="vip-card vip-card-interactive p-6 text-left group"
               >
-                <p className="font-bold text-[17px] text-black mb-2">🎲 大屏开奖</p>
-                <p className="text-xs text-gray-600 font-medium tracking-wide leading-relaxed">全屏演示模式下的轮动式抽奖</p>
+                <span className="mb-4 grid h-10 w-10 place-items-center rounded-xl bg-[#eff6ff] text-[#2563eb]"><MonitorUp size={19} /></span>
+                <p className="mb-2 font-semibold text-[16px]">大屏开奖</p>
+                <p className="text-sm leading-relaxed text-[#6b7280]">进入全屏轮动式抽奖舞台</p>
               </button>
               <button
                 onClick={() => window.open(`/display?event=${projectId}`, '_blank')}
-                className="p-6 apple-glass hover:bg-white/10 rounded-3xl transition-all text-left group"
+                className="vip-card vip-card-interactive p-6 text-left group"
               >
-                <p className="font-bold text-[17px] mb-2 group-hover:text-amber-400 transition-colors">签到看板</p>
-                <p className="text-xs text-white/50 tracking-wide leading-relaxed">实时监测访客扫码登记状态及人流情况</p>
+                <span className="mb-4 grid h-10 w-10 place-items-center rounded-xl bg-[#ecfdf5] text-[#059669]"><UserCheck size={19} /></span>
+                <p className="mb-2 font-semibold text-[16px]">签到看板</p>
+                <p className="text-sm leading-relaxed text-[#6b7280]">实时查看访客签到与抽奖池状态</p>
               </button>
             </div>
           ) : (
@@ -501,23 +526,23 @@ const ProjectSettingsPage = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
               <button
                 onClick={() => window.open(`/lottery/wheel?event=${projectId}`, '_blank')}
-                className="p-6 bg-white hover:bg-gray-100 rounded-3xl border border-white/10 transition-all text-left group shadow-[0_4px_30px_rgba(255,255,255,0.25)]"
+                className="vip-card vip-card-interactive p-6 text-left group"
               >
-                <p className="font-bold text-[17px] text-black mb-2">🎰 预览转盘</p>
+                <p className="font-bold text-[17px] mb-2 flex items-center gap-2"><Eye size={18} className="text-blue-500" />预览转盘</p>
                 <p className="text-xs text-gray-600 font-medium tracking-wide leading-relaxed">查看用户扫码后看到的转盘抽奖页面</p>
               </button>
               <button
                 onClick={() => window.open(`/lottery/wheel/admin?event=${projectId}&mode=admin`, '_blank')}
-                className="p-6 apple-glass hover:bg-white/10 rounded-3xl transition-all text-left group border border-blue-500/20"
+                className="vip-card vip-card-interactive p-6 text-left group"
               >
-                <p className="font-bold text-[17px] mb-2 group-hover:text-blue-400 transition-colors">📊 管理后台</p>
+                <p className="font-bold text-[17px] mb-2 flex items-center gap-2 group-hover:text-blue-500 transition-colors"><Settings size={18} />管理后台</p>
                 <p className="text-xs text-white/50 tracking-wide leading-relaxed">中奖记录、核销凭证、奖品库存管理</p>
               </button>
               <button
                 onClick={() => setShowLinkModal(true)}
-                className="p-6 apple-glass hover:bg-white/10 rounded-3xl transition-all text-left group"
+                className="vip-card vip-card-interactive p-6 text-left group"
               >
-                <p className="font-bold text-[17px] mb-2 group-hover:text-green-400 transition-colors">📱 二维码 & 链接</p>
+                <p className="font-bold text-[17px] mb-2 flex items-center gap-2 group-hover:text-blue-500 transition-colors"><QrCode size={18} />二维码与链接</p>
                 <p className="text-xs text-white/50 tracking-wide leading-relaxed">生成二维码供访客扫码参与抽奖</p>
               </button>
             </div>
@@ -594,16 +619,17 @@ const ProjectSettingsPage = () => {
 
         return (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fade-in p-4"
+            className="vip-modal-backdrop fixed inset-0 z-50 flex items-center justify-center animate-fade-in p-4"
             onClick={() => setShowLinkModal(false)}
           >
             <div
-              className="apple-glass-dark border border-white/15 rounded-[32px] p-8 w-full max-w-md shadow-[0_20px_80px_rgba(0,0,0,0.6)] transform animate-bounceIn"
+              className="vip-modal p-8 w-full max-w-md transform animate-bounceIn"
               onClick={(e) => e.stopPropagation()}
             >
               {/* 关闭按钮 */}
               <button
                 onClick={() => setShowLinkModal(false)}
+                aria-label="关闭分享弹窗"
                 className="absolute top-6 right-6 p-2 hover:bg-white/10 rounded-full transition-colors text-white/60 hover:text-white"
               >
                 <X size={20} />
@@ -657,6 +683,7 @@ const ProjectSettingsPage = () => {
           </div>
         );
       })()}
+      <MobileBottomNav active="lottery" lotteryProjectId={projectId} />
     </div>
   );
 };
