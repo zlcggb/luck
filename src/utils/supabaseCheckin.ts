@@ -782,7 +782,7 @@ export const createProject = async (
     return null;
   }
 
-  // 转盘模式：自动初始化默认奖品
+  // 自动初始化默认奖品
   if (mode === 'wheel' && project) {
     const defaultPrizes = [
       { name: '一等奖', description: 'Smartphone', quantity: 1, remaining: 1, sort_order: 1 },
@@ -798,9 +798,39 @@ export const createProject = async (
         ...p,
         is_active: true,
       })));
+  } else if (mode === 'rolling' && project) {
+    await initDefaultRollingPrizes(project.id);
   }
 
   return project as LuckEvent;
+};
+
+/**
+ * 为轮动抽奖项目初始化默认奖项（支持 UUID 主键）
+ */
+export const initDefaultRollingPrizes = async (eventId: string): Promise<LuckPrize[]> => {
+  const defaultRollingPrizes = [
+    { name: '特等奖', description: 'Future Car Model S', quantity: 1, remaining: 1, sort_order: 1, image: 'https://images.unsplash.com/photo-1552519507-da3b142c6e3d?auto=format&fit=crop&w=600&q=80' },
+    { name: '一等奖', description: 'MacBook Pro M3', quantity: 2, remaining: 2, sort_order: 2, image: 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?auto=format&fit=crop&w=600&q=80' },
+    { name: '二等奖', description: 'iPhone 15 Pro Max', quantity: 5, remaining: 5, sort_order: 3, image: 'https://images.unsplash.com/photo-1696446701796-da61225697cc?auto=format&fit=crop&w=600&q=80' },
+    { name: '三等奖', description: 'Keep Gift Card', quantity: 10, remaining: 10, sort_order: 4, image: 'https://images.unsplash.com/photo-1549465220-1a8b9238cd48?auto=format&fit=crop&w=600&q=80' },
+  ];
+
+  const { data, error } = await supabase
+    .from('luck_prizes')
+    .insert(defaultRollingPrizes.map(p => ({
+      event_id: eventId,
+      ...p,
+      is_active: true,
+    })))
+    .select();
+
+  if (error) {
+    console.error('初始化轮动默认奖品失败:', error);
+    return [];
+  }
+
+  return (data || []) as LuckPrize[];
 };
 
 /**
@@ -957,6 +987,17 @@ export const drawRollingWinners = async (
   prizeId: string,
   count: number
 ): Promise<{ success: boolean; data?: LuckWinner[]; error?: string }> => {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!eventId || !uuidRegex.test(eventId)) {
+    return { success: false, error: '活动 ID 格式无效，请检查链接' };
+  }
+  if (!prizeId || !uuidRegex.test(prizeId)) {
+    return { success: false, error: '当前奖项未同步至云端或奖项 ID 无效，请在活动设置中保存并刷新奖项' };
+  }
+  if (!count || count < 1 || count > 50) {
+    return { success: false, error: '单次抽取人数须在 1 到 50 人之间' };
+  }
+
   const { data, error } = await supabase.rpc('draw_rolling_winners', {
     p_event_id: eventId,
     p_prize_id: prizeId,
@@ -966,14 +1007,25 @@ export const drawRollingWinners = async (
   if (error) {
     console.error('轮动抽奖失败:', error);
     const messages: Record<string, string> = {
-      EVENT_OWNER_REQUIRED: '当前账号无权操作此活动',
+      EVENT_OWNER_REQUIRED: '当前账号无权操作此活动（需使用活动创建者账号登录）',
       ROLLING_EVENT_REQUIRED: '该活动不是轮动抽奖模式',
-      PRIZE_NOT_FOUND: '奖项不存在或已经停用',
+      PRIZE_NOT_FOUND: '奖项不存在或已被停用',
       INSUFFICIENT_PRIZE_REMAINING: '奖项剩余名额不足',
-      INSUFFICIENT_ELIGIBLE_PARTICIPANTS: '抽奖池人数不足',
+      INSUFFICIENT_ELIGIBLE_PARTICIPANTS: '抽奖池可用人数不足，请先确认参会人员完成签到',
+      INVALID_DRAW_COUNT: '单次抽取人数须在 1 到 50 之间',
+      EVENT_NOT_FOUND: '未找到该活动，可能已被删除',
+      'invalid input syntax for type uuid': '奖项数据异常（无效的奖项ID），请重新配置并保存奖项',
+      'permission denied': '权限不足或未登录管理员账号，请先登录',
+      'JWT': '登录会话已过期，请重新登录后再试',
+      'P0002': '查询不到指定的活动或奖项',
+      '42501': '权限校验失败，仅活动管理员可操作开奖',
     };
-    const knownError = Object.entries(messages).find(([code]) => error.message.includes(code));
-    return { success: false, error: knownError?.[1] || '开奖失败，请检查网络后重试' };
+    const errMsg = error.message || '';
+    const knownError = Object.entries(messages).find(([code]) => errMsg.includes(code));
+    return {
+      success: false,
+      error: knownError?.[1] || (errMsg ? `开奖失败: ${errMsg}` : '开奖失败，请检查网络后重试'),
+    };
   }
 
   return { success: true, data: (data || []) as LuckWinner[] };

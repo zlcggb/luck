@@ -26,6 +26,7 @@ import {
   getPrizes,
   getParticipants,
   createPrize,
+  initDefaultRollingPrizes,
   updatePrize as updatePrizeApi,
   deletePrize as deletePrizeApi
 } from '../utils/supabaseCheckin';
@@ -175,23 +176,18 @@ const ProjectSettingsPage = () => {
           setPrizes(localPrizes);
         } else {
           // 创建默认奖项
-          const defaultPrizes: Prize[] = [
-            { id: 'prize_1', name: '特等奖', count: 1, description: 'iPhone 15 Pro Max', drawn: 0 },
-            { id: 'prize_2', name: '一等奖', count: 3, description: 'MacBook Pro', drawn: 0 },
-            { id: 'prize_3', name: '二等奖', count: 5, description: 'iPad Air', drawn: 0 },
-            { id: 'prize_4', name: '三等奖', count: 10, description: 'AirPods Pro', drawn: 0 },
-          ];
-          setPrizes(defaultPrizes);
-          savePrizes(defaultPrizes);
-          
-          // 同步到数据库
-          for (const prize of defaultPrizes) {
-            await createPrize(projectId, {
-              name: prize.name,
-              description: prize.description,
-              quantity: prize.count,
-              sort_order: defaultPrizes.indexOf(prize)
-            });
+          const createdPrizes = await initDefaultRollingPrizes(projectId);
+          if (createdPrizes.length > 0) {
+            const localPrizes: Prize[] = createdPrizes.map(p => ({
+              id: p.id,
+              name: p.name,
+              count: p.quantity,
+              description: p.description || '',
+              drawn: p.quantity - p.remaining,
+              image: p.image || undefined
+            }));
+            setPrizes(localPrizes);
+            savePrizes(localPrizes);
           }
         }
       }
@@ -216,9 +212,6 @@ const ProjectSettingsPage = () => {
   // 处理奖项变化 - 保存到本地和数据库
   const handlePrizesChange = async (newPrizes: Prize[]) => {
     if (!projectId) return;
-    
-    setPrizes(newPrizes);
-    savePrizes(newPrizes);
     
     // 同步到数据库
     try {
@@ -254,8 +247,23 @@ const ProjectSettingsPage = () => {
           await deletePrizeApi(dbPrize.id);
         }
       }
+
+      // 同步完成后从数据库重新拉取带正确 UUID 的奖项
+      const updatedDbPrizes = await getPrizes(projectId);
+      const syncedPrizes: Prize[] = updatedDbPrizes.map(p => ({
+        id: p.id,
+        name: p.name,
+        count: p.quantity,
+        description: p.description || '',
+        drawn: p.quantity - p.remaining,
+        image: p.image || undefined,
+      }));
+      setPrizes(syncedPrizes);
+      savePrizes(syncedPrizes);
     } catch (error) {
       console.error('同步奖项到数据库失败:', error);
+      setPrizes(newPrizes);
+      savePrizes(newPrizes);
     }
   };
 

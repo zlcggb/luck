@@ -49,6 +49,7 @@ import {
   getCheckedInParticipants,
   getPrizes as getDbPrizes,
   getWinners,
+  initDefaultRollingPrizes,
   subscribeToParticipants,
 } from './utils/supabaseCheckin';
 import { buildRollingPool, mergeCheckedInParticipant } from './utils/rollingPool';
@@ -131,11 +132,16 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
             setBackgroundMusic(getBackgroundMusicFromSettings(dbSettings));
           }
 
-          const [dbParticipants, dbPrizes, dbWinners] = await Promise.all([
+          let [dbParticipants, dbPrizes, dbWinners] = await Promise.all([
             getCheckedInParticipants(eventId),
             getDbPrizes(eventId),
             getWinners(eventId),
           ]);
+
+          // 若数据库中尚无奖项，尝试自动初始化默认轮动奖项
+          if (dbPrizes.length === 0) {
+            dbPrizes = await initDefaultRollingPrizes(eventId);
+          }
 
           loadedParticipants = buildRollingPool(dbParticipants, new Set());
           loadedExcludedIds = new Set(dbWinners.map(winner => winner.employee_id.trim().toUpperCase()));
@@ -161,6 +167,9 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
               drawn: p.quantity - p.remaining,
               image: p.image || undefined,
             }));
+          } else {
+            // 真实活动下若未配置奖项，置空而不是保留 mock 数据，防止 UUID 报错
+            loadedPrizes = [];
           }
         } catch (err) {
           console.error('从数据库加载项目数据失败:', err);
@@ -468,16 +477,20 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
   };
 
   const startLottery = () => {
+    if (!currentPrize) {
+      showWarning(eventId ? "当前活动尚未配置奖项，请在管理后台先添加奖项！" : "请先选择一个奖项！");
+      return;
+    }
+    if (eventId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(currentPrize.id)) {
+      showWarning("当前奖项未同步至云端，请在活动设置中保存并刷新奖项后再开奖！");
+      return;
+    }
     if (availableParticipants.length === 0) {
-      showWarning("奖池已空！请导入参与者名单。");
+      showWarning(eventId ? "抽奖池为空！请先让参会人员扫码签到。" : "奖池已空！请导入参与者名单。");
       return;
     }
     if (availableParticipants.length < batchSize) {
-      showWarning(`奖池人数不足 ${batchSize} 人！`);
-      return;
-    }
-    if (!currentPrize) {
-      showWarning("请先选择一个奖项！");
+      showWarning(`抽奖池可用人数不足 ${batchSize} 人！（当前仅有 ${availableParticipants.length} 人可抽）`);
       return;
     }
     if (currentPrize.drawn >= currentPrize.count) {
