@@ -230,5 +230,56 @@ describe('supabaseCheckin - drawRollingWinners validation & error mapping', () =
     expect(currentDb.find(p => p.id === 'prize-1')?.name).toBe('特等奖(修改)');
     expect(currentDb.find(p => p.name === '新三等奖')).toBeDefined();
   });
+
+  it('routes Supabase requests through same-origin /supabase-api proxy and falls back if proxy returns HTML', async () => {
+    const { createSupabaseFetch } = await import('./supabaseCheckin');
+    const supabaseOrigin = 'https://jkxjpopqbkjpevkcncrr.supabase.co';
+
+    const mockBaseFetch = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: 'evt-1' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+
+    const proxyFetch = createSupabaseFetch(supabaseOrigin, mockBaseFetch as any, {
+      forceProxyInTest: true,
+    });
+
+    const res = await proxyFetch(`${supabaseOrigin}/rest/v1/luck_events?select=*`);
+    expect(res.status).toBe(200);
+    expect(mockBaseFetch).toHaveBeenCalledTimes(1);
+    expect(mockBaseFetch.mock.calls[0][0]).toBe(
+      `${window.location.origin}/supabase-api/rest/v1/luck_events?select=*`
+    );
+
+    // Fallback when proxy returns SPA HTML (e.g. proxy not configured)
+    const fallbackFetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response('<!doctype html><html></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 'evt-direct' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      );
+
+    const fallbackFetch = createSupabaseFetch(supabaseOrigin, fallbackFetchMock as any, {
+      forceProxyInTest: true,
+    });
+
+    const fallbackRes = await fallbackFetch(`${supabaseOrigin}/rest/v1/luck_events?select=*`);
+    const body = await fallbackRes.json();
+    expect(body.id).toBe('evt-direct');
+    expect(fallbackFetchMock).toHaveBeenCalledTimes(2);
+    expect(fallbackFetchMock.mock.calls[1][0]).toBe(
+      `${supabaseOrigin}/rest/v1/luck_events?select=*`
+    );
+  });
 });
 

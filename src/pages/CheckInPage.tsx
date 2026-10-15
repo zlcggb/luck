@@ -21,6 +21,7 @@ import {
   checkIn,
   getActiveEvent,
   getEvent,
+  getLastEventErrorType,
   getCheckInByEmployee,
   isCheckInOpen
 } from '../utils/supabaseCheckin';
@@ -146,53 +147,66 @@ const CheckInPage = () => {
     return () => clearTimeout(timer);
   }, [pageState, returnCountdown, event]);
 
-  useEffect(() => {
-    const init = async () => {
-      let activeEvent: LuckEvent | null = null;
-      
-      if (eventIdFromUrl) {
-        activeEvent = await getEvent(eventIdFromUrl);
-        if (!activeEvent) {
-          setError('活动不存在或已过期');
-          setPageState('error');
-          return;
-        }
-      } else {
-        activeEvent = await getActiveEvent();
-      }
-      
-      if (activeEvent) {
-        setEvent(activeEvent);
-        const checkInStatus = await isCheckInOpen(activeEvent.id);
-        if (!checkInStatus.open) {
-          setError(checkInStatus.message || '签到通道未开启');
-          setPageState('closed');
-          return;
-        }
-
-        // 读取活动配置中的工号前缀
-        const dbSettings = await loadProjectSettings(activeEvent.id);
-        const prefix = getEmployeeIdPrefixFromSettings(dbSettings);
-        setEmployeeIdPrefix(prefix);
-      } else {
-        setError('暂无进行中的展会活动');
+  const initEvent = async () => {
+    setPageState('loading');
+    setError('');
+    let activeEvent: LuckEvent | null = null;
+    
+    if (eventIdFromUrl) {
+      activeEvent = await getEvent(eventIdFromUrl);
+      if (!activeEvent) {
+        const errType = getLastEventErrorType();
+        setError(
+          errType === 'network'
+            ? '网络连接异常，请检查网络或点击重试'
+            : '活动不存在或已过期'
+        );
         setPageState('error');
         return;
       }
-      
-      // 根据活动模式决定初始页面
-      if (activeEvent.mode === 'rolling') {
-        setPageState('rolling_search');
-      } else {
-        setPageState('form');
+    } else {
+      activeEvent = await getActiveEvent();
+    }
+    
+    if (activeEvent) {
+      setEvent(activeEvent);
+      const checkInStatus = await isCheckInOpen(activeEvent.id);
+      if (!checkInStatus.open) {
+        setError(checkInStatus.message || '签到通道未开启');
+        setPageState('closed');
+        return;
       }
-    };
 
-    init();
+      // 读取活动配置中的工号前缀
+      const dbSettings = await loadProjectSettings(activeEvent.id);
+      const prefix = getEmployeeIdPrefixFromSettings(dbSettings);
+      setEmployeeIdPrefix(prefix);
+    } else {
+      const errType = getLastEventErrorType();
+      setError(
+        errType === 'network'
+          ? '网络连接异常，请检查网络或点击重试'
+          : '暂无进行中的展会活动'
+      );
+      setPageState('error');
+      return;
+    }
+    
+    // 根据活动模式决定初始页面
+    if (activeEvent.mode === 'rolling') {
+      setPageState('rolling_search');
+    } else {
+      setPageState('form');
+    }
+  };
+
+  useEffect(() => {
+    void initEvent();
 
     return () => {
       clearRedirectTimer();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventIdFromUrl]);
 
   useEffect(() => {
@@ -837,7 +851,9 @@ const CheckInPage = () => {
       
       <button
         onClick={() => {
-          if (event?.mode === 'rolling') {
+          if (!event) {
+            void initEvent();
+          } else if (event.mode === 'rolling') {
             setPageState('rolling_search');
           } else {
             setPageState('form');

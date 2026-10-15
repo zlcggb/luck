@@ -227,4 +227,42 @@ describe('CheckInPage - Employee ID prefix & checkin flow', () => {
       name: '周刘成',
     }));
   });
+
+  it('displays network error message when event fetch fails due to network and retries on button click', async () => {
+    const mockEvent = {
+      id: 'fad30511-b527-4944-a6aa-4b2bbf75d36a',
+      name: '2026-测试',
+      mode: 'rolling' as const,
+      require_location: false,
+      status: 'active' as const,
+    };
+
+    const getEventSpy = vi
+      .spyOn(supabaseCheckin, 'getEvent')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(mockEvent as any);
+    vi.spyOn(supabaseCheckin, 'getLastEventErrorType').mockReturnValue('network');
+    vi.spyOn(supabaseCheckin, 'isCheckInOpen').mockResolvedValue({ open: true });
+    vi.spyOn(projectSettings, 'loadProjectSettings').mockResolvedValue({
+      employeeIdPrefix: 'U',
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={[`/checkin?event=${mockEvent.id}`]}>
+        <CheckInPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('网络连接异常，请检查网络或点击重试')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: '重试' }));
+
+    await waitFor(() => {
+      expect(getEventSpy).toHaveBeenCalledTimes(2);
+      expect(screen.getByPlaceholderText('请输入您的姓名')).toBeInTheDocument();
+    });
+  });
 });

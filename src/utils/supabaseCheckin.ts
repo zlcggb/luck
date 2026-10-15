@@ -7,7 +7,64 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const SUPABASE_PROXY_PREFIX = '/supabase-api';
+
+/**
+ * 构建支持同源反向代理（/supabase-api）与直连自动回退的 Fetch 适配器
+ * 解决中国移动等网络环境下 *.supabase.co 域名被 DNS 污染或阻断的问题
+ */
+export const createSupabaseFetch = (
+  targetOrigin: string,
+  baseFetch: typeof fetch = fetch,
+  options?: { forceProxyInTest?: boolean }
+): typeof fetch => {
+  const cleanTargetOrigin = (targetOrigin || '').replace(/\/+$/, '');
+
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const rawUrl =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    const isTestEnv =
+      !options?.forceProxyInTest &&
+      typeof import.meta !== 'undefined' &&
+      import.meta.env?.MODE === 'test';
+    const hasWindowOrigin =
+      typeof window !== 'undefined' &&
+      Boolean(window.location?.origin) &&
+      /^https?:\/\//i.test(window.location.origin);
+
+    if (!isTestEnv && hasWindowOrigin && cleanTargetOrigin && rawUrl.startsWith(cleanTargetOrigin)) {
+      const pathAndQuery = rawUrl.slice(cleanTargetOrigin.length);
+      const proxiedUrl = `${window.location.origin}${SUPABASE_PROXY_PREFIX}${pathAndQuery}`;
+
+      try {
+        const proxyRequest =
+          input instanceof Request ? new Request(proxiedUrl, input.clone()) : proxiedUrl;
+        const proxyResponse = await baseFetch(proxyRequest, init);
+        const contentType = proxyResponse.headers?.get('content-type') || '';
+
+        // 若未命中 SPA fallback（非 text/html），直接使用同源代理响应
+        if (!contentType.includes('text/html')) {
+          return proxyResponse;
+        }
+      } catch {
+        // 同源代理不可用时自动回退到直连 Supabase
+      }
+    }
+
+    return baseFetch(input, init);
+  };
+};
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  global: {
+    fetch: createSupabaseFetch(supabaseUrl),
+  },
+});
 
 // 默认活动ID
 export const DEFAULT_EVENT_ID = '5576b391-5748-44e7-aa05-721845a764e0';
@@ -129,7 +186,28 @@ export interface LuckCheckIn {
 // 活动 API
 // ============================================
 
+export type EventFetchErrorType = 'network' | 'not_found' | null;
+
+let lastEventFetchErrorType: EventFetchErrorType = null;
+
+export const isNetworkFetchError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const msg = String((error as { message?: unknown }).message || '');
+  const details = String((error as { details?: unknown }).details || '');
+  const combined = `${msg} ${details}`.toLowerCase();
+  return (
+    combined.includes('failed to fetch') ||
+    combined.includes('fetch failed') ||
+    combined.includes('networkerror') ||
+    combined.includes('load failed') ||
+    combined.includes('network request failed')
+  );
+};
+
+export const getLastEventErrorType = (): EventFetchErrorType => lastEventFetchErrorType;
+
 export const getEvent = async (eventId: string = DEFAULT_EVENT_ID): Promise<LuckEvent | null> => {
+  lastEventFetchErrorType = null;
   const { data, error } = await supabase
     .from('luck_events')
     .select('*')
@@ -137,6 +215,7 @@ export const getEvent = async (eventId: string = DEFAULT_EVENT_ID): Promise<Luck
     .single();
   
   if (error) {
+    lastEventFetchErrorType = isNetworkFetchError(error) ? 'network' : 'not_found';
     console.error('获取活动失败:', error);
     return null;
   }
@@ -144,6 +223,7 @@ export const getEvent = async (eventId: string = DEFAULT_EVENT_ID): Promise<Luck
 };
 
 export const getActiveEvent = async (): Promise<LuckEvent | null> => {
+  lastEventFetchErrorType = null;
   const { data, error } = await supabase
     .from('luck_events')
     .select('*')
@@ -153,6 +233,7 @@ export const getActiveEvent = async (): Promise<LuckEvent | null> => {
     .single();
   
   if (error) {
+    lastEventFetchErrorType = isNetworkFetchError(error) ? 'network' : 'not_found';
     console.error('获取活动失败:', error);
     return null;
   }
