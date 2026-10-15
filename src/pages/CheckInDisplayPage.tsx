@@ -286,34 +286,51 @@ const CheckInDisplayPage = ({ onBack, eventId: propEventId }: CheckInDisplayPage
     }
   };
 
-  // 实时订阅签到记录
+  // 实时订阅签到记录 + HTTP 反向代理增量轮询双通道（防止移动热点/防火墙阻断 WebSocket）
   useEffect(() => {
     if (!event) return;
 
-    const unsubscribe = subscribeToCheckIns(event.id, (newCheckIn) => {
-      // 播放提示音
-      if (soundEnabled) {
-        playCheckInSound();
-      }
+    let isMounted = true;
 
+    const handleIncomingCheckIn = (newCheckIn: LuckCheckIn) => {
       setRecords(prev => {
-        // 防止重复插入相同记录
         if (prev.some(r => r.id === newCheckIn.id || (r.employee_id === newCheckIn.employee_id && r.event_id === newCheckIn.event_id))) {
           return prev;
         }
+        if (soundEnabled) {
+          playCheckInSound();
+        }
+        setStats(prevStats => ({
+          ...prevStats,
+          checkedInCount: prevStats.checkedInCount + 1,
+          checkInPercentage: Math.round(((prevStats.checkedInCount + 1) / prevStats.totalParticipants) * 100),
+          lastCheckInTime: newCheckIn.check_in_time,
+        }));
         return [newCheckIn, ...prev];
       });
-      
-      // 更新统计
-      setStats(prev => ({
-        ...prev,
-        checkedInCount: prev.checkedInCount + 1,
-        checkInPercentage: Math.round(((prev.checkedInCount + 1) / prev.totalParticipants) * 100),
-        lastCheckInTime: newCheckIn.check_in_time,
-      }));
-    });
+    };
 
-    return unsubscribe;
+    const unsubscribe = subscribeToCheckIns(event.id, handleIncomingCheckIn);
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const latestCheckIns = await getCheckInRecords(event.id, 30);
+        if (!isMounted || latestCheckIns.length === 0) return;
+        // 从旧到新依次尝试合并，确保最新签到排在最前并触发动画
+        for (let i = latestCheckIns.length - 1; i >= 0; i -= 1) {
+          handleIncomingCheckIn(latestCheckIns[i]);
+        }
+      } catch {
+        // 静默忽略轮询瞬断
+      }
+    }, 3000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(pollInterval);
+      unsubscribe();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [event, soundEnabled]);
 
   // 处理新签到（保留作为备用）

@@ -47,9 +47,11 @@ import {
 import {
   drawRollingWinners,
   getCheckedInParticipants,
+  getLiveLotteryState,
   getPrizes as getDbPrizes,
   getWinners,
   initDefaultRollingPrizes,
+  LotteryBroadcastAction,
   syncEventPrizes,
   subscribeToParticipants,
   undoRollingWinner,
@@ -597,91 +599,105 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
     return result;
   };
 
+  const lastHandledSeqRef = useRef<number>(Date.now());
+  const pollTickRef = useRef<number>(0);
+
+  const applyRemoteBroadcastAction = (action: LotteryBroadcastAction) => {
+    if (typeof action.seq === 'number') {
+      if (action.seq <= lastHandledSeqRef.current) {
+        return;
+      }
+      lastHandledSeqRef.current = action.seq;
+    }
+
+    if (action.type === 'DRAW_START') {
+      if (action.prizeId) {
+        setCurrentPrizeId(action.prizeId);
+      }
+      if (action.batchSize) {
+        setBatchSize(action.batchSize);
+      }
+      setShowConfetti(false);
+      setHasDrawn(false);
+      setShowAllWinners(false);
+      setIsRolling(true);
+
+      if (timerRef.current) clearInterval(timerRef.current);
+      timerRef.current = setInterval(() => {
+        const currentPool = participantsRef.current;
+        const currentExcluded = excludedIdsRef.current;
+        const available = currentPool.filter(p => !currentExcluded.has(p.id));
+        const poolToUse = available.length > 0 ? available : currentPool;
+        const batch = getRandomBatch(poolToUse, action.batchSize || 1);
+        setCurrentDisplay(batch);
+      }, 80);
+    } else if (action.type === 'DRAW_STOP') {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      setIsRolling(false);
+      setShowConfetti(true);
+      setHasDrawn(true);
+
+      const normalizedWinners: Participant[] = action.winners.map(w => ({
+        id: w.id,
+        name: w.name,
+        dept: w.dept || '',
+        avatar: w.avatar,
+      }));
+      setCurrentDisplay(normalizedWinners);
+
+      const curPrize = prizesRef.current.find(p => p.id === action.prizeId);
+      const prizeName = curPrize?.name || '中奖奖项';
+
+      const newRecord: DrawRecord = {
+        id: `record_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: Date.now(),
+        prizeId: action.prizeId,
+        prizeName,
+        winners: normalizedWinners,
+      };
+      setRecords(prev => [newRecord, ...prev]);
+
+      setExcludedIds(prev => {
+        const next = new Set(prev);
+        action.winners.forEach(w => next.add(w.id.trim().toUpperCase()));
+        return next;
+      });
+
+      setPrizes(prev => prev.map(p =>
+        p.id === action.prizeId
+          ? { ...p, drawn: p.drawn + action.winners.length }
+          : p
+      ));
+
+      // 检查当前用户是否中奖
+      if (currentEmployeeId) {
+        const isMe = action.winners.some(
+          w => w.id.trim().toUpperCase() === currentEmployeeId.toUpperCase()
+        );
+        if (isMe) {
+          setCurrentUserWonPrize({ prizeName });
+        }
+      }
+    } else if (action.type === 'PRIZE_CHANGE') {
+      if (action.prizeId) {
+        setCurrentPrizeId(action.prizeId);
+        resetDisplay(false);
+      }
+    } else if (action.type === 'RESET_DISPLAY') {
+      resetDisplay(false);
+    }
+  };
+
   // 订阅抽奖全流程同频广播与中奖数据同步（用户端与管理端多端实时联动）
   useEffect(() => {
     if (!eventId) return;
 
     const unsubscribe = subscribeToLotterySync(eventId, {
       onBroadcast: (action) => {
-        if (action.type === 'DRAW_START') {
-          if (action.prizeId) {
-            setCurrentPrizeId(action.prizeId);
-          }
-          if (action.batchSize) {
-            setBatchSize(action.batchSize);
-          }
-          setShowConfetti(false);
-          setHasDrawn(false);
-          setShowAllWinners(false);
-          setIsRolling(true);
-
-          if (timerRef.current) clearInterval(timerRef.current);
-          timerRef.current = setInterval(() => {
-            const currentPool = participantsRef.current;
-            const currentExcluded = excludedIdsRef.current;
-            const available = currentPool.filter(p => !currentExcluded.has(p.id));
-            const poolToUse = available.length > 0 ? available : currentPool;
-            const batch = getRandomBatch(poolToUse, action.batchSize || 1);
-            setCurrentDisplay(batch);
-          }, 80);
-        } else if (action.type === 'DRAW_STOP') {
-          if (timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
-          setIsRolling(false);
-          setShowConfetti(true);
-          setHasDrawn(true);
-
-          const normalizedWinners: Participant[] = action.winners.map(w => ({
-            id: w.id,
-            name: w.name,
-            dept: w.dept || '',
-            avatar: w.avatar,
-          }));
-          setCurrentDisplay(normalizedWinners);
-
-          const curPrize = prizesRef.current.find(p => p.id === action.prizeId);
-          const prizeName = curPrize?.name || '中奖奖项';
-
-          const newRecord: DrawRecord = {
-            id: `record_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-            timestamp: Date.now(),
-            prizeId: action.prizeId,
-            prizeName,
-            winners: normalizedWinners,
-          };
-          setRecords(prev => [newRecord, ...prev]);
-
-          setExcludedIds(prev => {
-            const next = new Set(prev);
-            action.winners.forEach(w => next.add(w.id.trim().toUpperCase()));
-            return next;
-          });
-
-          setPrizes(prev => prev.map(p =>
-            p.id === action.prizeId
-              ? { ...p, drawn: p.drawn + action.winners.length }
-              : p
-          ));
-
-          // 检查当前用户是否中奖
-          if (currentEmployeeId) {
-            const isMe = action.winners.some(
-              w => w.id.trim().toUpperCase() === currentEmployeeId.toUpperCase()
-            );
-            if (isMe) {
-              setCurrentUserWonPrize({ prizeName });
-            }
-          }
-        } else if (action.type === 'PRIZE_CHANGE') {
-          if (action.prizeId) {
-            setCurrentPrizeId(action.prizeId);
-            resetDisplay(false);
-          }
-        } else if (action.type === 'RESET_DISPLAY') {
-          resetDisplay(false);
-        }
+        applyRemoteBroadcastAction(action);
       },
       onWinnerInsert: (newWinner) => {
         const winnerId = newWinner.employee_id.trim().toUpperCase();
@@ -730,24 +746,52 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
     return () => {
       unsubscribe();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId, currentEmployeeId]);
 
-  // --- 实时数据增量兜底轮询（解决移动端锁屏唤醒、弱网或 Realtime 断开） ---
+  // --- 实时数据双通道增量轮询（解决中国移动 WebSocket 阻断、移动端锁屏唤醒或弱网断开） ---
   useEffect(() => {
     if (!eventId) return;
 
     let isSubscribed = true;
 
     const pollLatestData = async () => {
-      if (isRolling) return;
-
       try {
-        const [latestWinners, latestDbPrizes] = await Promise.all([
+        // 0. 观众端通过 HTTP 反向代理同步舞台实时动作（DRAW_START / DRAW_STOP / PRIZE_CHANGE）
+        if (!isAdmin) {
+          const liveState = await getLiveLotteryState(eventId);
+          if (!isSubscribed) return;
+          if (liveState && typeof liveState.seq === 'number' && liveState.seq > lastHandledSeqRef.current) {
+            applyRemoteBroadcastAction(liveState);
+            if (liveState.type === 'DRAW_START') {
+              return;
+            }
+          }
+        }
+
+        if (isRolling) return;
+
+        pollTickRef.current += 1;
+        const shouldSyncPool = pollTickRef.current % 3 === 0;
+
+        const [latestWinners, latestDbPrizes, latestParticipants] = await Promise.all([
           getWinners(eventId),
           getDbPrizes(eventId),
+          shouldSyncPool ? getCheckedInParticipants(eventId) : Promise.resolve(null),
         ]);
 
         if (!isSubscribed) return;
+
+        // 0.5 增量合并新签到的参与者至抽奖池（防止大屏 WebSocket 被阻断时漏人）
+        if (latestParticipants && latestParticipants.length > 0) {
+          setParticipants(current => {
+            let next = current;
+            for (const p of latestParticipants) {
+              next = mergeCheckedInParticipant(next, p);
+            }
+            return next;
+          });
+        }
 
         // 1. 同步中奖记录与已中奖工号
         if (latestWinners.length > 0) {
@@ -813,13 +857,14 @@ const App = ({ onOpenCheckInDisplay, isAdmin = false }: AppProps) => {
       }
     };
 
-    const intervalTimer = setInterval(pollLatestData, 2500);
+    const intervalTimer = setInterval(pollLatestData, 1500);
 
     return () => {
       isSubscribed = false;
       clearInterval(intervalTimer);
     };
-  }, [eventId, isRolling, currentEmployeeId, currentUserWonPrize]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventId, isAdmin, isRolling, currentEmployeeId, currentUserWonPrize]);
 
   // --- 核心逻辑：开始/停止抽奖 ---
   const toggleLottery = () => {

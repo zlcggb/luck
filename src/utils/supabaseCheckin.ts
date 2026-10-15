@@ -422,10 +422,10 @@ export const subscribeToParticipants = (
 // ============================================
 
 export type LotteryBroadcastAction =
-  | { type: 'DRAW_START'; prizeId: string; batchSize: number }
-  | { type: 'DRAW_STOP'; prizeId: string; winners: { id: string; name: string; dept?: string; avatar?: string }[]; remainingSlots?: number }
-  | { type: 'PRIZE_CHANGE'; prizeId: string }
-  | { type: 'RESET_DISPLAY' };
+  | { type: 'DRAW_START'; prizeId: string; batchSize: number; seq?: number }
+  | { type: 'DRAW_STOP'; prizeId: string; winners: { id: string; name: string; dept?: string; avatar?: string }[]; remainingSlots?: number; seq?: number }
+  | { type: 'PRIZE_CHANGE'; prizeId: string; seq?: number }
+  | { type: 'RESET_DISPLAY'; seq?: number };
 
 export interface LotterySyncCallbacks {
   onBroadcast?: (action: LotteryBroadcastAction) => void;
@@ -438,6 +438,13 @@ const getLotteryChannelTopic = (eventId: string) => `lottery_sync_${eventId}`;
 
 let sharedLotteryChannel: ReturnType<typeof supabase.channel> | null = null;
 let sharedLotteryEventId: string | null = null;
+let lastBroadcastSeq = 0;
+
+const nextBroadcastSeq = (): number => {
+  const now = Date.now();
+  lastBroadcastSeq = now > lastBroadcastSeq ? now : lastBroadcastSeq + 1;
+  return lastBroadcastSeq;
+};
 
 export const getOrCreateLotterySyncChannel = (eventId: string) => {
   if (sharedLotteryChannel && sharedLotteryEventId === eventId) {
@@ -456,13 +463,81 @@ export const getOrCreateLotterySyncChannel = (eventId: string) => {
 };
 
 /**
- * 发送抽奖状态广播（供管理端/大屏调用）
+ * 将抽奖舞台实时状态持久化到 luck_events.settings.liveLotteryState（供 HTTP 反向代理轮询双通道同步）
+ */
+export const persistLiveLotteryState = async (
+  eventId: string,
+  action: LotteryBroadcastAction
+): Promise<void> => {
+  if (!eventId) return;
+  try {
+    const { data: current, error: readError } = await supabase
+      .from('luck_events')
+      .select('settings')
+      .eq('id', eventId)
+      .single();
+
+    if (readError) return;
+
+    const currentSettings = (current?.settings as Record<string, unknown>) || {};
+    await supabase
+      .from('luck_events')
+      .update({
+        settings: {
+          ...currentSettings,
+          liveLotteryState: action,
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', eventId);
+  } catch {
+    // 忽略非管理员或网络瞬断异常
+  }
+};
+
+/**
+ * 通过 HTTP（走 /supabase-api 同源反向代理）读取最新抽奖舞台状态
+ */
+export const getLiveLotteryState = async (
+  eventId: string
+): Promise<LotteryBroadcastAction | null> => {
+  if (!eventId) return null;
+  try {
+    const { data, error } = await supabase
+      .from('luck_events')
+      .select('settings')
+      .eq('id', eventId)
+      .single();
+
+    if (error || !data?.settings) return null;
+    const settings = data.settings as Record<string, unknown>;
+    const liveState = settings.liveLotteryState as LotteryBroadcastAction | undefined;
+    if (!liveState || typeof liveState !== 'object' || !liveState.type) {
+      return null;
+    }
+    return liveState;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * 发送抽奖状态广播（WebSocket 实时广播 + HTTP 舞台状态双通道写入）
  */
 export const broadcastLotteryEvent = async (
   eventId: string,
   action: LotteryBroadcastAction
 ) => {
   if (!eventId) return;
+  const enrichedAction: LotteryBroadcastAction = {
+    ...action,
+    seq: action.seq ?? nextBroadcastSeq(),
+  };
+
+  // 通道 1：写入 luck_events.settings 供移动网络 HTTP 反向代理秒级同频
+  void persistLiveLotteryState(eventId, enrichedAction);
+
+  // 通道 2：WebSocket Realtime 毫秒级广播
   try {
     const channel = getOrCreateLotterySyncChannel(eventId);
     if (channel.state !== 'joined' && channel.state !== 'joining') {
@@ -471,7 +546,7 @@ export const broadcastLotteryEvent = async (
     await channel.send({
       type: 'broadcast',
       event: 'lottery_action',
-      payload: action,
+      payload: enrichedAction,
     });
   } catch (err) {
     console.error('发送抽奖同步广播失败:', err);
